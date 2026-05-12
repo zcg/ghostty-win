@@ -10,6 +10,7 @@ const configpkg = @import("../../config.zig");
 const CoreSurface = @import("../../Surface.zig");
 const CoreApp = @import("../../App.zig");
 const terminal = @import("../../terminal/main.zig");
+const build_config = @import("../../build_config.zig");
 
 const log = std.log.scoped(.win32_surface);
 
@@ -175,8 +176,10 @@ pub fn init(self: *Self, parent: HWND, app: *App) !void {
     const WS_CHILD: u32 = 0x40000000;
     const WS_VISIBLE: u32 = 0x10000000;
     const WS_CLIPCHILDREN: u32 = 0x02000000;
+    // TEST: Remove WS_EX_NOREDIRECTIONBITMAP to see if it affects AMD crash.
+    const ex_style: u32 = 0;
     const child = CreateWindowExW(
-        0,
+        ex_style,
         class_name,
         null,
         WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
@@ -198,7 +201,9 @@ pub fn init(self: *Self, parent: HWND, app: *App) !void {
     _ = SetWindowLongPtrW(child, GWLP_USERDATA, @bitCast(@intFromPtr(self)));
     try self.createProgressOverlay();
 
-    try self.initOpenGL();
+    if (build_config.renderer == .opengl) {
+        try self.initOpenGL();
+    }
 }
 
 var surface_class_registered: bool = false;
@@ -433,6 +438,7 @@ extern "user32" fn ShowCursor(bShow: i32) callconv(.winapi) i32;
 /// Update the OpenGL viewport to match the current window size.
 /// Called from the renderer thread before each frame.
 pub fn updateViewport(self: *Self) void {
+    if (self.hglrc == null) return;
     glViewport(0, 0, @intCast(self.width), @intCast(self.height));
 }
 

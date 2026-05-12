@@ -40,7 +40,7 @@ pub const Uniforms = extern struct {
 };
 
 /// The target to load shaders for.
-pub const Target = enum { glsl, msl };
+pub const Target = enum { glsl, msl, hlsl };
 
 /// Load a set of shaders from files and convert them to the target
 /// format. The shader order is preserved.
@@ -129,12 +129,13 @@ pub fn loadFromFile(
         break :spirv list.items;
     };
 
-    // Convert to MSL
+    // Convert to target shader language
     return switch (target) {
         // Important: using the alloc_gpa here on purpose because this
         // is the final result that will be returned to the caller.
         .glsl => try glslFromSpv(alloc_gpa, spirv),
         .msl => try mslFromSpv(alloc_gpa, spirv),
+        .hlsl => try hlslFromSpv(alloc_gpa, spirv),
     };
 }
 
@@ -251,6 +252,16 @@ pub fn mslFromSpv(alloc: Allocator, spv: []const u8) ![:0]const u8 {
             ) != c.SPVC_SUCCESS) {
                 return error.SpvcFailed;
             }
+        }
+    }).setOptions);
+}
+
+/// Convert SPIR-V binary to HLSL.
+pub fn hlslFromSpv(alloc: Allocator, spv: []const u8) ![:0]const u8 {
+    const c = spvcross.c;
+    return try spvCross(alloc, c.SPVC_BACKEND_HLSL, spv, (struct {
+        fn setOptions(options: c.spvc_compiler_options) error{SpvcFailed}!void {
+            _ = options;
         }
     }).setOptions);
 }

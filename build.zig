@@ -21,6 +21,17 @@ pub fn build(b: *std.Build) !void {
     // want to know what options are available, you can run `--help` or
     // you can read `src/build/Config.zig`.
 
+    // Map `-Dtarget=win32` to `-Dtarget=x86_64-windows` for convenience.
+    if (b.user_input_options.get("target")) |opt| {
+        switch (opt.value) {
+            .scalar => |s| if (std.mem.eql(u8, s, "win32")) {
+                const gop = b.user_input_options.getPtr("target").?;
+                gop.value = .{ .scalar = "x86_64-windows" };
+            },
+            else => {},
+        }
+    }
+
     // If we have a VERSION file (present in source tarballs) then we
     // use that as the version source of truth. Otherwise we fall back
     // to what is in the build.zig.zon.

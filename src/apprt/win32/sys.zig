@@ -148,3 +148,64 @@ pub extern "user32" fn FindWindowW(lpClassName: ?[*:0]const u16, lpWindowName: ?
 pub const ERROR_ALREADY_EXISTS: DWORD = 183;
 /// Custom app message used for single-instance "open new window" notification.
 pub const WM_APP_NEW_WINDOW: UINT = 0x8000 + 1; // WM_APP + 1
+
+// ============================================================================
+// DWM (Desktop Window Manager) API for backdrop effects
+// ============================================================================
+
+pub const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
+pub const DWMWA_SYSTEMBACKDROP_TYPE: DWORD = 38;
+
+pub const DWM_SYSTEMBACKDROP_TYPE = enum(DWORD) {
+    auto = 0,
+    none = 1,
+    main_window = 2, // Mica
+    transient_window = 3, // Acrylic
+    tabbed_window = 4, // Mica Alt
+};
+
+pub const MARGINS = extern struct {
+    cxLeftWidth: c_int,
+    cxRightWidth: c_int,
+    cyTopHeight: c_int,
+    cyBottomHeight: c_int,
+};
+
+pub extern "dwmapi" fn DwmSetWindowAttribute(
+    hwnd: HWND,
+    dwAttribute: DWORD,
+    pvAttribute: *const anyopaque,
+    cbAttribute: DWORD,
+) callconv(.winapi) c_int;
+
+pub extern "dwmapi" fn DwmExtendFrameIntoClientArea(
+    hwnd: HWND,
+    pMarInset: *const MARGINS,
+) callconv(.winapi) c_int;
+
+// SetWindowCompositionAttribute for Win10 acrylic fallback
+pub const WINDOWCOMPOSITIONATTRIB = enum(DWORD) {
+    accent_policy = 19,
+};
+
+pub const ACCENT_STATE = enum(DWORD) {
+    accent_enable_acrylicblurbehind = 4,
+};
+
+pub const ACCENT_POLICY = extern struct {
+    nAccentState: ACCENT_STATE,
+    nColor: DWORD,
+    nAnimationId: DWORD,
+    dwFlags: DWORD,
+};
+
+pub const WINDOWCOMPOSITIONATTRIBDATA = extern struct {
+    nAttrib: WINDOWCOMPOSITIONATTRIB,
+    pData: ?*anyopaque,
+    ulDataSize: usize,
+};
+
+pub extern "user32" fn SetWindowCompositionAttribute(
+    hwnd: HWND,
+    pData: *WINDOWCOMPOSITIONATTRIBDATA,
+) callconv(.winapi) c_int;

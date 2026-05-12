@@ -1529,6 +1529,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     .height = surface_size.height,
                 };
                 self.updateScreenSizeUniforms();
+
+                // Resize the swap chain if the graphics API supports it.
+                if (@hasDecl(GraphicsAPI, "resizeSwapChain")) {
+                    self.api.resizeSwapChain(surface_size.width, surface_size.height) catch |err| {
+                        log.err("resizeSwapChain failed: {}", .{err});
+                    };
+                }
             }
 
             // If this frame's target isn't the correct size, or the target

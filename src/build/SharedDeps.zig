@@ -598,10 +598,24 @@ pub fn add(
             .gtk => try self.addGtkNg(step),
             .win32 => {
                 step.linkSystemLibrary2("user32", .{});
-                step.linkSystemLibrary2("gdi32", .{});
-                step.linkSystemLibrary2("opengl32", .{});
                 step.linkSystemLibrary2("imm32", .{});
                 step.linkSystemLibrary2("shell32", .{});
+                switch (self.config.renderer) {
+                    .d3d11 => {
+                        step.linkSystemLibrary2("d3d11", .{});
+                        step.linkSystemLibrary2("dxgi", .{});
+                        step.linkSystemLibrary2("d3dcompiler", .{});
+                        step.linkSystemLibrary2("dcomp", .{});
+                    },
+                    .opengl => {
+                        step.linkSystemLibrary2("gdi32", .{});
+                        step.linkSystemLibrary2("opengl32", .{});
+                    },
+                    else => {
+                        step.linkSystemLibrary2("gdi32", .{});
+                        step.linkSystemLibrary2("opengl32", .{});
+                    },
+                }
             },
         }
     }

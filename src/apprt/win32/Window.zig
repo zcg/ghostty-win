@@ -13,6 +13,8 @@ const sys = @import("sys.zig");
 
 const App = @import("App.zig");
 
+const log = std.log.scoped(.win32_window);
+
 const HWND = sys.HWND;
 const RECT = sys.RECT;
 const BOOL = sys.BOOL;
@@ -237,6 +239,65 @@ fn createHwnd(self: *Window, title_override: ?[:0]const u8) !void {
     if (self.hwnd == null) return error.Win32Error;
     _ = sys.ShowWindow(self.hwnd.?, sys.SW_SHOWNORMAL);
     _ = sys.UpdateWindow(self.hwnd.?);
+    self.applyBackdropEffect();
+}
+
+/// Apply DWM backdrop effect (Acrylic/Mica/Mica Alt) to the window.
+/// This is called once after window creation and whenever config changes.
+fn applyBackdropEffect(self: *Window) void {
+    const hwnd = self.hwnd orelse return;
+    const blur = self.app.config.@"background-blur";
+
+    // Only apply on Windows 11 22H2+ where DWMWA_SYSTEMBACKDROP_TYPE is supported.
+    // Win10 falls back to basic transparency (no blur).
+    const backdrop_type: sys.DWM_SYSTEMBACKDROP_TYPE = switch (blur) {
+        .acrylic, .true => .transient_window,
+        .mica => .main_window,
+        .@"mica-alt" => .tabbed_window,
+        else => {
+            // For non-Fluent blur values, disable the system backdrop
+            // and let the renderer handle transparency directly.
+            _ = sys.DwmSetWindowAttribute(
+                hwnd,
+                sys.DWMWA_SYSTEMBACKDROP_TYPE,
+                &@intFromEnum(sys.DWM_SYSTEMBACKDROP_TYPE.none),
+                @sizeOf(sys.DWM_SYSTEMBACKDROP_TYPE),
+            );
+            return;
+        },
+    };
+
+    // Extend frame into client area so DWM renders backdrop behind everything
+    const margins = sys.MARGINS{
+        .cxLeftWidth = -1,
+        .cxRightWidth = -1,
+        .cyTopHeight = -1,
+        .cyBottomHeight = -1,
+    };
+    _ = sys.DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+    // Set dark mode for immersive title bar
+    const dark_mode: c_int = 1;
+    _ = sys.DwmSetWindowAttribute(
+        hwnd,
+        sys.DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &dark_mode,
+        @sizeOf(c_int),
+    );
+
+    // Apply the backdrop type
+    const result = sys.DwmSetWindowAttribute(
+        hwnd,
+        sys.DWMWA_SYSTEMBACKDROP_TYPE,
+        &@intFromEnum(backdrop_type),
+        @sizeOf(sys.DWM_SYSTEMBACKDROP_TYPE),
+    );
+
+    if (result == 0) {
+        log.info("applied DWM backdrop effect: {s}", .{@tagName(blur)});
+    } else {
+        log.warn("DwmSetWindowAttribute(SYSTEMBACKDROP_TYPE) failed: {}", .{result});
+    }
 }
 
 fn createTabControl(self: *Window) !void {
