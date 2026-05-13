@@ -1104,7 +1104,28 @@ fn handleTextInput(surface: *Surface, msg: UINT, wparam: WPARAM) LRESULT {
     _ = msg;
     if (surface.core_surface) |core| {
         const mods = getModifiers();
-        const codepoint: u21 = @intCast(wparam);
+
+        // Handle UTF-16 surrogate pairs for characters outside BMP (emoji, etc.)
+        const codepoint: u21 = cp: {
+            const wc: u16 = @intCast(wparam);
+            if (wc >= 0xD800 and wc <= 0xDBFF) {
+                // High surrogate - save and wait for low surrogate
+                surface.pending_high_surrogate = wc;
+                return 0;
+            } else if (wc >= 0xDC00 and wc <= 0xDFFF) {
+                // Low surrogate - combine with pending high surrogate
+                const high = surface.pending_high_surrogate orelse return 0;
+                surface.pending_high_surrogate = null;
+                const hi: u32 = high - 0xD800;
+                const lo: u32 = wc - 0xDC00;
+                break :cp @intCast(0x10000 + (hi << 10) + lo);
+            } else {
+                // Regular BMP character
+                surface.pending_high_surrogate = null;
+                break :cp wc;
+            }
+        };
+
         if (codepoint < 0x20 or codepoint == 0x7f) return 0;
         var utf8_buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(codepoint, &utf8_buf) catch 0;

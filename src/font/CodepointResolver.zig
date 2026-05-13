@@ -249,14 +249,17 @@ fn windowsFontFallback(
 
     // List of Windows system fonts to try for fallback, in priority order.
     // These cover CJK, Arabic, Hebrew, Thai, and other scripts.
+    //
+    // Emoji fonts are listed first so that emoji characters use colored
+    // glyphs rather than falling back to monochrome glyphs in CJK fonts.
     const fallback_fonts = [_][:0]const u8{
+        "C:\\Windows\\Fonts\\seguiemj.ttf", // Segoe UI Emoji (color emoji)
         "C:\\Windows\\Fonts\\msgothic.ttc", // MS Gothic (Japanese)
         "C:\\Windows\\Fonts\\meiryo.ttc", // Meiryo (Japanese)
         "C:\\Windows\\Fonts\\YuGothM.ttc", // Yu Gothic (Japanese)
         "C:\\Windows\\Fonts\\msyh.ttc", // Microsoft YaHei (Chinese)
         "C:\\Windows\\Fonts\\simsun.ttc", // SimSun (Chinese)
         "C:\\Windows\\Fonts\\malgun.ttf", // Malgun Gothic (Korean)
-        "C:\\Windows\\Fonts\\seguiemj.ttf", // Segoe UI Emoji
         "C:\\Windows\\Fonts\\segoeui.ttf", // Segoe UI
         "C:\\Windows\\Fonts\\arial.ttf", // Arial
         "C:\\Windows\\Fonts\\arialuni.ttf", // Arial Unicode MS

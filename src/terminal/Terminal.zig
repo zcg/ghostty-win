@@ -315,50 +315,66 @@ pub fn printRepeat(self: *Terminal, count_req: usize) !void {
 // chars have width=1 in the stub tables.generated.zig. We manually
 // detect CJK and other East Asian wide characters here.
 fn codepointWidth(cp: u32) u2 {
-    // CJK Unified Ideographs
-    if (cp >= 0x4E00 and cp <= 0x9FFF) return 2;
-    // CJK Unified Ideographs Extension A
-    if (cp >= 0x3400 and cp <= 0x4DBF) return 2;
-    // CJK Unified Ideographs Extension B-G
-    if (cp >= 0x20000 and cp <= 0x2EBEF) return 2;
-    // CJK Compatibility Ideographs
-    if (cp >= 0xF900 and cp <= 0xFAFF) return 2;
-    // CJK Compatibility Ideographs Supplement
-    if (cp >= 0x2F800 and cp <= 0x2FA1F) return 2;
-    // Hangul Syllables
-    if (cp >= 0xAC00 and cp <= 0xD7AF) return 2;
-    // Hangul Jamo (some)
-    if (cp >= 0x1100 and cp <= 0x11FF) return 2;
-    // Hiragana
-    if (cp >= 0x3040 and cp <= 0x309F) return 2;
-    // Katakana
-    if (cp >= 0x30A0 and cp <= 0x30FF) return 2;
-    // Fullwidth ASCII variants
-    if (cp >= 0xFF01 and cp <= 0xFF5E) return 2;
-    // Halfwidth Katakana
-    if (cp >= 0xFF65 and cp <= 0xFF9F) return 1;
-    // Fullwidth symbol variants
-    if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
-    // CJK Symbols and Punctuation (most are width 2)
+    // === CJK Unified Ideographs ===
+    if (cp >= 0x4E00 and cp <= 0x9FFF) return 2; // CJK Unified Ideographs
+    if (cp >= 0x3400 and cp <= 0x4DBF) return 2; // CJK Extension A
+    if (cp >= 0x20000 and cp <= 0x2EBEF) return 2; // CJK Extension B~F
+    if (cp >= 0x30000 and cp <= 0x3134F) return 2; // CJK Extension G
+    if (cp >= 0x31350 and cp <= 0x323AF) return 2; // CJK Extension H
+    if (cp >= 0x323B0 and cp <= 0x33479) return 2; // CJK Extension J
+
+    // === CJK Radicals and Components ===
+    if (cp >= 0x2E80 and cp <= 0x2EFF) return 2; // CJK Radicals Supplement
+    if (cp >= 0x2F00 and cp <= 0x2FDF) return 2; // Kangxi Radicals
+    if (cp >= 0x2FF0 and cp <= 0x2FFF) return 2; // Ideographic Description Characters
+    if (cp >= 0x31C0 and cp <= 0x31EF) return 2; // CJK Strokes
+
+    // === CJK Compatibility ===
+    if (cp >= 0xF900 and cp <= 0xFAFF) return 2; // CJK Compatibility Ideographs
+    if (cp >= 0x2F800 and cp <= 0x2FA1F) return 2; // CJK Compatibility Ideographs Supplement
+
+    // === CJK Symbols and Punctuation ===
     if (cp >= 0x3000 and cp <= 0x303F) {
-        // Exception: U+3000 is fullwidth space (width 2)
-        if (cp == 0x3000) return 2;
-        // U+303F is IDEOGRAPHIC HALF FILL SPACE (width 1)
-        if (cp == 0x303F) return 1;
+        if (cp == 0x303F) return 1; // IDEOGRAPHIC HALF FILL SPACE
         return 2;
     }
-    // Enclosed CJK Letters and Months
-    if (cp >= 0x3200 and cp <= 0x32FF) return 2;
-    // CJK Compatibility
-    if (cp >= 0x3300 and cp <= 0x33FF) return 2;
-    // Bopomofo
-    if (cp >= 0x3100 and cp <= 0x312F) return 2;
-    // Bopomofo Extended
-    if (cp >= 0x31A0 and cp <= 0x31BF) return 2;
-    // General Punctuation - em dash, en dash, etc.
+    if (cp >= 0x3200 and cp <= 0x32FF) return 2; // Enclosed CJK Letters and Months
+    if (cp >= 0x3300 and cp <= 0x33FF) return 2; // CJK Compatibility
+
+    // === Japanese ===
+    if (cp >= 0x3040 and cp <= 0x309F) return 2; // Hiragana
+    if (cp >= 0x30A0 and cp <= 0x30FF) return 2; // Katakana
+    if (cp >= 0x31F0 and cp <= 0x31FF) return 2; // Katakana Phonetic Extensions
+
+    // === Korean ===
+    if (cp >= 0xAC00 and cp <= 0xD7AF) return 2; // Hangul Syllables
+    // Hangul Jamo: standalone width is 1 (V/T confirmed by uucode tests)
+    if (cp >= 0x1100 and cp <= 0x11FF) return 1;
+
+    // === Bopomofo ===
+    if (cp >= 0x3100 and cp <= 0x312F) return 2; // Bopomofo
+    if (cp >= 0x31A0 and cp <= 0x31BF) return 2; // Bopomofo Extended
+
+    // === Fullwidth / Halfwidth Forms ===
+    if (cp >= 0xFF01 and cp <= 0xFF5E) return 2; // Fullwidth ASCII variants
+    if (cp >= 0xFF65 and cp <= 0xFF9F) return 1; // Halfwidth Katakana
+    if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2; // Fullwidth symbol variants
+
+    // === General Punctuation (CJK style) ===
     if (cp >= 0x2018 and cp <= 0x201F) return 2;
     if (cp == 0x2026 or cp == 0x2025) return 2; // ellipsis
     if (cp == 0x2014 or cp == 0x2015) return 2; // em dash, horizontal bar
+
+    // === Emoji (uucode stub returns 1, but these are width 2) ===
+    if (cp >= 0x1F600 and cp <= 0x1F64F) return 2; // Emoticons
+    if (cp >= 0x1F300 and cp <= 0x1F5FF) return 2; // Misc Symbols and Pictographs
+    if (cp >= 0x1F680 and cp <= 0x1F6FF) return 2; // Transport and Map Symbols
+    if (cp >= 0x1F900 and cp <= 0x1F9FF) return 2; // Supplemental Symbols and Pictographs
+    if (cp >= 0x1FA00 and cp <= 0x1FAFF) return 2; // Extended Symbols and Pictographs
+    if (cp >= 0x2600 and cp <= 0x26FF) return 2; // Miscellaneous Symbols
+    if (cp >= 0x2700 and cp <= 0x27BF) return 2; // Dingbats
+    if (cp >= 0x1F1E6 and cp <= 0x1F1FF) return 2; // Regional Indicators
+
     // Fallback to uucode table
     return unicode.table.get(@intCast(cp)).width;
 }

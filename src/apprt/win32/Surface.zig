@@ -136,6 +136,9 @@ layout_x: i32 = 0,
 layout_y: i32 = 0,
 layout_w: i32 = 0,
 
+/// Pending high surrogate for UTF-16 surrogate pair input (emoji, etc.)
+pending_high_surrogate: ?u16 = null,
+
 const App = @import("App.zig");
 const Window = @import("Window.zig");
 const ProgressState = terminal.osc.Command.ProgressReport.State;
