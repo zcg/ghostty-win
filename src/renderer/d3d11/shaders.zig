@@ -270,18 +270,9 @@ fn compileCellText(device: *api.ID3D11Device) !Pipeline {
         .{
             .semantic_name = "TEXCOORD",
             .semantic_index = 4,
-            .format = .r8_uint, // atlas: u8
+            .format = .r8g8_uint, // atlas + bools: [2]u8 at offsets 28,29
             .input_slot = 0,
             .aligned_byte_offset = 28,
-            .input_slot_class = .per_instance_data,
-            .instance_data_step_rate = 1,
-        },
-        .{
-            .semantic_name = "TEXCOORD",
-            .semantic_index = 5,
-            .format = .r8_uint, // bools: u8
-            .input_slot = 0,
-            .aligned_byte_offset = 29,
             .input_slot_class = .per_instance_data,
             .instance_data_step_rate = 1,
         },
@@ -865,8 +856,7 @@ const cell_text_vs =
     \\    int2  bearings    : TEXCOORD2;
     \\    uint2 grid_pos    : TEXCOORD3;
     \\    uint4 color       : COLOR0;
-    \\    uint  atlas       : TEXCOORD4;
-    \\    uint  glyph_bools : TEXCOORD5;
+    \\    uint2 atlas_and_bools : TEXCOORD4; // x=atlas, y=bools
     \\};
     \\
     \\struct VS_OUTPUT
@@ -913,13 +903,14 @@ const cell_text_vs =
     \\    // Texture coordinate in pixels (not normalized)
     \\    output.tex_coord = float2(input.glyph_pos.x, input.glyph_pos.y) + float2(input.glyph_size.x, input.glyph_size.y) * corner;
     \\
-    \\    output.atlas = input.atlas;
+    \\    uint atlas = input.atlas_and_bools.x;
+    \\    uint glyph_bools = input.atlas_and_bools.y;
     \\
     \\    // Load foreground color (always linearized)
-    \\    float4 fg = float4(input.color.x, input.color.y, input.color.z, input.color.w) / 255.0;
-    \\    fg = linearize(fg);
-    \\    fg.rgb *= fg.a;
-    \\    output.color = fg;
+    \\    float4 color = float4(input.color.x, input.color.y, input.color.z, input.color.w) / 255.0;
+    \\    color = linearize(color);
+    \\    color.rgb *= color.a;
+    \\    output.color = color;
     \\
     \\    // Load background color from the bg_cells buffer
     \\    uint cell_index = input.grid_pos.y * grid_size.x + input.grid_pos.x;
@@ -949,7 +940,7 @@ const cell_text_vs =
     \\    output.bg_col = cell_bg_col;
     \\
     \\    // Minimum contrast check
-    \\    if (min_contrast > 1.0 && (input.glyph_bools & NO_MIN_CONTRAST) == 0) {
+    \\    if (min_contrast > 1.0 && (glyph_bools & NO_MIN_CONTRAST) == 0) {
     \\        output.color = contrasted_color(min_contrast, output.color, output.bg_col);
     \\    }
     \\
@@ -957,7 +948,7 @@ const cell_text_vs =
     \\    bool is_cursor_pos = ((input.grid_pos.x == cursor_pos.x) ||
     \\        (cursor_wide && (input.grid_pos.x == (cursor_pos.x + 1)))) &&
     \\        (input.grid_pos.y == cursor_pos.y);
-    \\    if ((input.glyph_bools & IS_CURSOR_GLYPH) == 0 && is_cursor_pos) {
+    \\    if ((glyph_bools & IS_CURSOR_GLYPH) == 0 && is_cursor_pos) {
     \\        uint4 u_cursor = uint4(
     \\            (cursor_color_packed_4u8 >> 0u) & 0xFFu,
     \\            (cursor_color_packed_4u8 >> 8u) & 0xFFu,

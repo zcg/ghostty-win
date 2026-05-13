@@ -311,6 +311,58 @@ pub fn printRepeat(self: *Terminal, count_req: usize) !void {
     }
 }
 
+// WORKAROUND: uucode's unicode table has a bug where all non-ASCII
+// chars have width=1 in the stub tables.generated.zig. We manually
+// detect CJK and other East Asian wide characters here.
+fn codepointWidth(cp: u32) u2 {
+    // CJK Unified Ideographs
+    if (cp >= 0x4E00 and cp <= 0x9FFF) return 2;
+    // CJK Unified Ideographs Extension A
+    if (cp >= 0x3400 and cp <= 0x4DBF) return 2;
+    // CJK Unified Ideographs Extension B-G
+    if (cp >= 0x20000 and cp <= 0x2EBEF) return 2;
+    // CJK Compatibility Ideographs
+    if (cp >= 0xF900 and cp <= 0xFAFF) return 2;
+    // CJK Compatibility Ideographs Supplement
+    if (cp >= 0x2F800 and cp <= 0x2FA1F) return 2;
+    // Hangul Syllables
+    if (cp >= 0xAC00 and cp <= 0xD7AF) return 2;
+    // Hangul Jamo (some)
+    if (cp >= 0x1100 and cp <= 0x11FF) return 2;
+    // Hiragana
+    if (cp >= 0x3040 and cp <= 0x309F) return 2;
+    // Katakana
+    if (cp >= 0x30A0 and cp <= 0x30FF) return 2;
+    // Fullwidth ASCII variants
+    if (cp >= 0xFF01 and cp <= 0xFF5E) return 2;
+    // Halfwidth Katakana
+    if (cp >= 0xFF65 and cp <= 0xFF9F) return 1;
+    // Fullwidth symbol variants
+    if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
+    // CJK Symbols and Punctuation (most are width 2)
+    if (cp >= 0x3000 and cp <= 0x303F) {
+        // Exception: U+3000 is fullwidth space (width 2)
+        if (cp == 0x3000) return 2;
+        // U+303F is IDEOGRAPHIC HALF FILL SPACE (width 1)
+        if (cp == 0x303F) return 1;
+        return 2;
+    }
+    // Enclosed CJK Letters and Months
+    if (cp >= 0x3200 and cp <= 0x32FF) return 2;
+    // CJK Compatibility
+    if (cp >= 0x3300 and cp <= 0x33FF) return 2;
+    // Bopomofo
+    if (cp >= 0x3100 and cp <= 0x312F) return 2;
+    // Bopomofo Extended
+    if (cp >= 0x31A0 and cp <= 0x31BF) return 2;
+    // General Punctuation - em dash, en dash, etc.
+    if (cp >= 0x2018 and cp <= 0x201F) return 2;
+    if (cp == 0x2026 or cp == 0x2025) return 2; // ellipsis
+    if (cp == 0x2014 or cp == 0x2015) return 2; // em dash, horizontal bar
+    // Fallback to uucode table
+    return unicode.table.get(@intCast(cp)).width;
+}
+
 pub fn print(self: *Terminal, c: u21) !void {
     // log.debug("print={x} y={} x={}", .{ c, self.screens.active.cursor.y, self.screens.active.cursor.x });
 
@@ -557,7 +609,7 @@ pub fn print(self: *Terminal, c: u21) !void {
     // non-single-width characters properly. We have a fast-path for
     // byte-sized characters since they're so common. We can ignore
     // control characters because they're always filtered prior.
-    const width: usize = if (c <= 0xFF) 1 else @intCast(unicode.table.get(c).width);
+    const width: usize = if (c <= 0xFF) 1 else codepointWidth(c);
 
     // Note: it is possible to have a width of "3" and a width of "-1" from
     // uucode.x's wcwidth. We should look into those cases and handle them

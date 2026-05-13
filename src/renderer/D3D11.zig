@@ -126,7 +126,10 @@ pub fn init(alloc: Allocator, opts: renderer.Options) !D3D11 {
 fn samplerOptionsInternal(device: *api.ID3D11Device) Sampler.Options {
     return .{
         .device = device,
-        .filter = .min_mag_mip_linear,
+        // Use nearest (point) filtering to match OpenGL's atlas sampler.
+        // Linear filtering causes glyph edge bleeding in tightly-packed
+        // font atlases, which is especially visible with CJK characters.
+        .filter = .min_mag_mip_point,
         .address_u = .clamp,
         .address_v = .clamp,
         .address_w = .clamp,
@@ -612,7 +615,8 @@ pub fn fgBufferOptions(self: *const D3D11) d3d11_buffer.Options {
     return .{
         .device = self.device,
         .device_context = self.device_context,
-        .usage = .default,
+        .usage = .dynamic,
+        .cpu_access_flags = .{ .write = true },
         .bind_flags = .{ .vertex_buffer = true },
     };
 }
