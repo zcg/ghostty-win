@@ -5,6 +5,7 @@ const fontconfig = @import("fontconfig");
 const macos = @import("macos");
 const opentype = @import("opentype.zig");
 const options = @import("main.zig").options;
+const directwrite_discovery = @import("discovery/DirectWrite.zig");
 const Collection = @import("main.zig").Collection;
 const DeferredFace = @import("main.zig").DeferredFace;
 const Variation = @import("main.zig").face.Variation;
@@ -21,6 +22,7 @@ pub const Discover = switch (options.backend) {
     .coretext_harfbuzz,
     .coretext_noshape,
     => CoreText,
+    .directwrite_harfbuzz => directwrite_discovery.DirectWrite,
 };
 
 /// Descriptor is used to search for fonts. The only required field
@@ -242,7 +244,7 @@ pub const Descriptor = struct {
 pub const Fontconfig = struct {
     fc_config: *fontconfig.Config,
 
-    pub fn init() Fontconfig {
+    pub fn init() !Fontconfig {
         // safe to call multiple times and concurrently
         _ = fontconfig.init();
         return .{ .fc_config = fontconfig.initLoadConfigAndFonts() };
@@ -333,7 +335,7 @@ pub const Fontconfig = struct {
 };
 
 pub const CoreText = struct {
-    pub fn init() CoreText {
+    pub fn init() !CoreText {
         // Required for the "interface" but does nothing for CoreText.
         return .{};
     }
@@ -900,7 +902,7 @@ test "fontconfig" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
-    var fc = Fontconfig.init();
+    var fc = try Fontconfig.init();
     defer fc.deinit();
     var it = try fc.discover(alloc, .{ .family = "monospace", .size = 12 });
     defer it.deinit();
@@ -912,7 +914,7 @@ test "fontconfig codepoint" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
-    var fc = Fontconfig.init();
+    var fc = try Fontconfig.init();
     defer fc.deinit();
     var it = try fc.discover(alloc, .{ .codepoint = 'A', .size = 12 });
     defer it.deinit();
@@ -934,7 +936,7 @@ test "coretext" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
-    var ct = CoreText.init();
+    var ct = try CoreText.init();
     defer ct.deinit();
     var it = try ct.discover(alloc, .{ .family = "Monaco", .size = 12 });
     defer it.deinit();
@@ -952,7 +954,7 @@ test "coretext codepoint" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
-    var ct = CoreText.init();
+    var ct = try CoreText.init();
     defer ct.deinit();
     var it = try ct.discover(alloc, .{ .codepoint = 'A', .size = 12 });
     defer it.deinit();
@@ -981,7 +983,7 @@ test "coretext sorting" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
-    var ct = CoreText.init();
+    var ct = try CoreText.init();
     defer ct.deinit();
 
     // We try to get a Regular, Italic, Bold, & Bold Italic version of SF Pro,

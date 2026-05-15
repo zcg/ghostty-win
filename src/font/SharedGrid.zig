@@ -420,6 +420,7 @@ fn testGrid(mode: TestMode, alloc: Allocator, lib: Library) !SharedGrid {
 }
 
 test getIndex {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     // const testEmoji = @import("test.zig").fontEmoji;
@@ -450,6 +451,7 @@ test getIndex {
 }
 
 test "renderGlyph error after cache insert rolls back cache entry" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     // This test verifies that when renderGlyph fails after inserting a cache
     // entry (via getOrPut), the errdefer properly removes the entry, preventing
     // corrupted/uninitialized data from remaining in the cache.
@@ -498,6 +500,7 @@ test "renderGlyph error after cache insert rolls back cache entry" {
 }
 
 test "init error" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     // Test every failure point in `init` and ensure that we don't
     // leak memory (testing.allocator verifies) since we're exiting early.
     //

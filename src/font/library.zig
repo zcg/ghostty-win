@@ -19,6 +19,7 @@ pub const Library = switch (options.backend) {
     .coretext_harfbuzz,
     .coretext_noshape,
     .web_canvas,
+    .directwrite_harfbuzz,
     => NoopLibrary,
 };
 

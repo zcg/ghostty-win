@@ -107,7 +107,7 @@ fn runArgs(alloc_gpa: Allocator, argsIter: anytype) !u8 {
     var map: std.StringHashMap(std.ArrayListUnmanaged([]const u8)) = .init(alloc);
 
     // Look up all available fonts
-    var disco = font.Discover.init();
+    var disco = try font.Discover.init();
     defer disco.deinit();
     var disco_it = try disco.discover(alloc, .{
         .family = config.family,

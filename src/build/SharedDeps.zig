@@ -600,6 +600,9 @@ pub fn add(
                 step.linkSystemLibrary2("user32", .{});
                 step.linkSystemLibrary2("imm32", .{});
                 step.linkSystemLibrary2("shell32", .{});
+                if (self.config.font_backend.hasDirectwrite()) {
+                    step.linkSystemLibrary2("dwrite", .{});
+                }
                 switch (self.config.renderer) {
                     .d3d11 => {
                         step.linkSystemLibrary2("d3d11", .{});

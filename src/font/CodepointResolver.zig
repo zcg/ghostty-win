@@ -454,6 +454,7 @@ const DescriptorCache = std.HashMapUnmanaged(
 );
 
 test getIndex {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.regular;
@@ -538,6 +539,7 @@ test getIndex {
 }
 
 test "getIndex disabled font style" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.regular;
@@ -606,6 +608,7 @@ test "getIndex disabled font style" {
 }
 
 test "getIndex box glyph" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
 

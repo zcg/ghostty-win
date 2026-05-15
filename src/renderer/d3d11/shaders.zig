@@ -905,6 +905,7 @@ const cell_text_vs =
     \\
     \\    uint atlas = input.atlas_and_bools.x;
     \\    uint glyph_bools = input.atlas_and_bools.y;
+    \\    output.atlas = atlas;
     \\
     \\    // Load foreground color (always linearized)
     \\    float4 color = float4(input.color.x, input.color.y, input.color.z, input.color.w) / 255.0;

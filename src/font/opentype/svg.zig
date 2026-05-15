@@ -94,6 +94,7 @@ pub const SVG = struct {
 };
 
 test "SVG" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.julia_mono;

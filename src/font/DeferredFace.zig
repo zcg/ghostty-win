@@ -18,6 +18,31 @@ const Presentation = @import("main.zig").Presentation;
 
 const log = std.log.scoped(.deferred_face);
 
+/// Helper to get a UTF-8 string from DirectWrite localized strings.
+fn getLocalizedString(names: *font.directwrite.IDWriteLocalizedStrings, buf: []u8) ![]const u8 {
+    var index: font.directwrite.UINT32 = 0;
+    var exists: font.directwrite.BOOL = font.directwrite.FALSE;
+    _ = names.findLocaleName(utf8ToUtf16("en-us"), &index, &exists);
+    if (exists == font.directwrite.FALSE) index = 0;
+
+    var len: font.directwrite.UINT32 = 0;
+    const hr = names.getStringLength(index, &len);
+    if (hr != font.directwrite.S_OK) return error.OutOfMemory;
+
+    var wbuf: [256:0]u16 = undefined;
+    if (len + 1 > wbuf.len) return error.OutOfMemory;
+
+    const hr2 = names.getString(index, &wbuf, len + 1);
+    if (hr2 != font.directwrite.S_OK) return error.OutOfMemory;
+
+    const len_utf8 = std.unicode.utf16LeToUtf8(buf, wbuf[0..len :0]) catch return error.OutOfMemory;
+    return buf[0..len_utf8];
+}
+
+fn utf8ToUtf16(comptime s: []const u8) [:0]const u16 {
+    return std.unicode.utf8ToUtf16LeStringLiteral(s);
+}
+
 /// Fontconfig
 fc: if (options.backend == .fontconfig_freetype) ?Fontconfig else void =
     if (options.backend == .fontconfig_freetype) null else {},
@@ -25,6 +50,10 @@ fc: if (options.backend == .fontconfig_freetype) ?Fontconfig else void =
 /// CoreText
 ct: if (font.Discover == font.discovery.CoreText) ?CoreText else void =
     if (font.Discover == font.discovery.CoreText) null else {},
+
+/// DirectWrite
+dw: if (options.backend == .directwrite_harfbuzz) ?DirectWrite else void =
+    if (options.backend == .directwrite_harfbuzz) null else {},
 
 /// Canvas
 wc: if (options.backend == .web_canvas) ?WebCanvas else void =
@@ -67,6 +96,20 @@ pub const CoreText = struct {
     }
 };
 
+/// DirectWrite specific data. This is only present when building with DirectWrite.
+pub const DirectWrite = struct {
+    /// The initialized font
+    font: *font.directwrite.IDWriteFont,
+
+    /// Variations to apply to this font.
+    variations: []const font.face.Variation,
+
+    pub fn deinit(self: *DirectWrite) void {
+        _ = self.font.release();
+        self.* = undefined;
+    }
+};
+
 /// WebCanvas specific data. This is only present when building with canvas.
 pub const WebCanvas = struct {
     /// The allocator to use for fonts
@@ -94,6 +137,7 @@ pub fn deinit(self: *DeferredFace) void {
         .coretext_harfbuzz,
         .coretext_noshape,
         => if (self.ct) |*ct| ct.deinit(),
+        .directwrite_harfbuzz => if (self.dw) |*dw_data| dw_data.deinit(),
     }
     self.* = undefined;
 }
@@ -117,6 +161,20 @@ pub fn familyName(self: DeferredFace, buf: []u8) ![]const u8 {
                 break :unsupported family_name.cstring(buf, .utf8) orelse
                     return error.OutOfMemory;
             };
+        },
+
+        .directwrite_harfbuzz => if (self.dw) |dw_data| {
+            var font_family: *font.directwrite.IDWriteFontFamily = undefined;
+            const hr = dw_data.font.getFontFamily(&font_family);
+            if (hr != font.directwrite.S_OK) return error.OutOfMemory;
+            defer _ = font_family.release();
+
+            var names: *font.directwrite.IDWriteLocalizedStrings = undefined;
+            const hr2 = font_family.getFamilyNames(&names);
+            if (hr2 != font.directwrite.S_OK) return error.OutOfMemory;
+            defer _ = names.release();
+
+            return getLocalizedString(names, buf);
         },
 
         .web_canvas => if (self.wc) |wc| return wc.font_str,
@@ -150,6 +208,15 @@ pub fn name(self: DeferredFace, buf: []u8) ![]const u8 {
             };
         },
 
+        .directwrite_harfbuzz => if (self.dw) |dw_data| {
+            var names: *font.directwrite.IDWriteLocalizedStrings = undefined;
+            const hr = dw_data.font.getFaceNames(&names);
+            if (hr != font.directwrite.S_OK) return error.OutOfMemory;
+            defer _ = names.release();
+
+            return getLocalizedString(names, buf);
+        },
+
         .web_canvas => if (self.wc) |wc| return wc.font_str,
     }
 
@@ -167,6 +234,7 @@ pub fn load(
         .coretext, .coretext_harfbuzz, .coretext_noshape => try self.loadCoreText(lib, opts),
         .coretext_freetype => try self.loadCoreTextFreetype(lib, opts),
         .web_canvas => try self.loadWebCanvas(opts),
+        .directwrite_harfbuzz => try self.loadDirectWrite(lib, opts),
 
         // Unreachable because we must be already loaded or have the
         // proper configuration for one of the other deferred mechanisms.
@@ -254,6 +322,19 @@ fn loadWebCanvas(
 ) !Face {
     const wc = self.wc.?;
     return try .initNamed(wc.alloc, wc.font_str, opts, wc.presentation);
+}
+
+fn loadDirectWrite(
+    self: *DeferredFace,
+    lib: Library,
+    opts: font.face.Options,
+) !Face {
+    _ = lib;
+    const dw_data = self.dw.?;
+    var face = try Face.initFontCopy(dw_data.font, opts);
+    errdefer face.deinit();
+    try face.setVariations(dw_data.variations, opts);
+    return face;
 }
 
 /// Returns true if this face can satisfy the given codepoint and
@@ -344,6 +425,23 @@ pub fn hasCodepoint(self: DeferredFace, cp: u32, p: ?Presentation) bool {
             return face.glyphIndex(cp) != null;
         },
 
+        .directwrite_harfbuzz => {
+            if (self.dw) |dw_data| {
+                // Check presentation
+                if (p) |desired_p| {
+                    const traits = dw_data.font.isSymbolFont();
+                    const actual_p: Presentation = if (traits == 1) .emoji else .text;
+                    if (actual_p != desired_p) return false;
+                }
+
+                // Check if font has character using DirectWrite API
+                var has_char: c_int = 0;
+                const hr = dw_data.font.hasCharacter(cp, &has_char);
+                if (hr != 0) return false;
+                return has_char == 1;
+            }
+        },
+
         .freetype => {},
     }
 
@@ -411,7 +509,7 @@ test "fontconfig" {
 
     // Get a deferred face from fontconfig
     var def = def: {
-        var fc = discovery.Fontconfig.init();
+        var fc = try discovery.Fontconfig.init();
         defer fc.deinit();
         var it = try fc.discover(alloc, .{ .family = "monospace", .size = 12 });
         defer it.deinit();
@@ -443,7 +541,7 @@ test "coretext" {
 
     // Get a deferred face from fontconfig
     var def = def: {
-        var fc = discovery.CoreText.init();
+        var fc = try discovery.CoreText.init();
         var it = try fc.discover(alloc, .{ .family = "Monaco", .size = 12 });
         defer it.deinit();
         break :def (try it.next()).?;

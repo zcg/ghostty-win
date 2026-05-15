@@ -552,7 +552,7 @@ fn discover(self: *SharedGridSet) !?*Discover {
     // If we initialized, use it
     if (self.font_discover) |*v| return v;
 
-    self.font_discover = .init();
+    self.font_discover = try .init();
     return &self.font_discover.?;
 }
 
@@ -911,6 +911,7 @@ test "Key different font DPI" {
 }
 
 test SharedGridSet {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
 

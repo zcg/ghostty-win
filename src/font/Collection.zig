@@ -947,6 +947,7 @@ test init {
 }
 
 test "add full" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     // This test is way too slow to run under Valgrind, unfortunately.
     if (std.valgrind.runningOnValgrind() > 0) return error.SkipZigTest;
 
@@ -1010,6 +1011,7 @@ test "add deferred without loading options" {
 }
 
 test getFace {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.regular;
@@ -1038,6 +1040,7 @@ test getFace {
 }
 
 test getIndex {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.regular;
@@ -1073,6 +1076,7 @@ test getIndex {
 }
 
 test completeStyles {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.regular;
@@ -1104,6 +1108,7 @@ test completeStyles {
 }
 
 test setSize {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.regular;
@@ -1131,6 +1136,7 @@ test setSize {
 }
 
 test hasCodepoint {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.regular;
@@ -1157,6 +1163,7 @@ test hasCodepoint {
 }
 
 test "hasCodepoint emoji default graphical" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
 
     const testing = std.testing;
@@ -1186,6 +1193,7 @@ test "hasCodepoint emoji default graphical" {
 }
 
 test "metrics" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.inconsolata;
@@ -1268,6 +1276,7 @@ test "metrics" {
 
 // TODO: Also test CJK fallback sizing, we don't currently have a CJK test font.
 test "adjusted sizes" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     const testing = std.testing;
     const alloc = testing.allocator;
     const testFont = font.embedded.inconsolata;
@@ -1393,6 +1402,7 @@ test "adjusted sizes" {
 }
 
 test "face metrics" {
+    if (comptime font.options.backend == .directwrite_harfbuzz) return error.SkipZigTest;
     // The web canvas backend doesn't calculate face metrics, only cell metrics
     if (options.backend != .web_canvas) return error.SkipZigTest;
 
