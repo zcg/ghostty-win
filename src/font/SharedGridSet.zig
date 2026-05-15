@@ -28,6 +28,7 @@ const SharedGrid = font.SharedGrid;
 const discovery = @import("discovery.zig");
 const configpkg = @import("../config.zig");
 const Config = configpkg.Config;
+const build_config = @import("../build_config.zig");
 
 const log = std.log.scoped(.font_shared_grid_set);
 
@@ -380,34 +381,30 @@ fn collection(
     // Emoji fallback. We don't include this on Mac since Mac is expected
     // to always have the Apple Emoji available on the system.
     if (comptime !builtin.target.os.tag.isDarwin() or Discover == void) {
-        _ = try c.add(
-            self.alloc,
-            try .init(
-                self.font_lib,
-                font.embedded.emoji,
-                load_options.faceOptions(),
-            ),
-            .{
-                .style = .regular,
-                .fallback = true,
-                // No size adjustment for emojis.
-                .size_adjustment = .none,
-            },
-        );
-        _ = try c.add(
-            self.alloc,
-            try .init(
-                self.font_lib,
-                font.embedded.emoji_text,
-                load_options.faceOptions(),
-            ),
-            .{
-                .style = .regular,
-                .fallback = true,
-                // No size adjustment for emojis.
-                .size_adjustment = .none,
-            },
-        );
+        // DirectWrite's CreateGlyphRunAnalysis cannot render COLR/CBDT
+        // color fonts (like NotoColorEmoji), so prefer the outline-based
+        // NotoEmoji-Regular which works with grayscale atlas.
+        const emoji_fonts = if (build_config.font_backend == .directwrite_harfbuzz)
+            .{ font.embedded.emoji_text, font.embedded.emoji }
+        else
+            .{ font.embedded.emoji, font.embedded.emoji_text };
+
+        inline for (emoji_fonts) |emoji_data| {
+            _ = try c.add(
+                self.alloc,
+                try .init(
+                    self.font_lib,
+                    emoji_data,
+                    load_options.faceOptions(),
+                ),
+                .{
+                    .style = .regular,
+                    .fallback = true,
+                    // No size adjustment for emojis.
+                    .size_adjustment = .none,
+                },
+            );
+        }
     }
 
     return c;

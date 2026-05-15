@@ -449,11 +449,6 @@ pub const Face = struct {
         glyph_index: u32,
         opts: font.face.RenderOptions,
     ) !font.Glyph {
-        // Color glyphs not yet supported for DirectWrite rendering
-        if (self.isColorGlyph(glyph_index)) {
-            return error.UnsupportedColorFormat;
-        }
-
         const factory = try getFactory();
         defer _ = factory.release();
 
@@ -597,7 +592,39 @@ pub const Face = struct {
 
         // Reserve space in atlas
         const reg = try atlas.reserve(alloc, @intCast(tex_width), @intCast(tex_height));
-        atlas.set(reg, alpha_buf);
+
+        // DirectWrite CreateAlphaTexture returns single-channel alpha.
+        // If the target atlas expects BGRA (color atlas for emoji), expand.
+        switch (atlas.format) {
+            .grayscale => atlas.set(reg, alpha_buf),
+            .bgra => {
+                const bgra_size = @as(usize, @intCast(tex_width)) * @as(usize, @intCast(tex_height)) * 4;
+                const bgra_buf = try alloc.alloc(u8, bgra_size);
+                defer alloc.free(bgra_buf);
+                var i: usize = 0;
+                while (i < alpha_buf.len) : (i += 1) {
+                    const a = alpha_buf[i];
+                    bgra_buf[i * 4 + 0] = a; // B
+                    bgra_buf[i * 4 + 1] = a; // G
+                    bgra_buf[i * 4 + 2] = a; // R
+                    bgra_buf[i * 4 + 3] = a; // A
+                }
+                atlas.set(reg, bgra_buf);
+            },
+            .bgr => {
+                const bgr_size = @as(usize, @intCast(tex_width)) * @as(usize, @intCast(tex_height)) * 3;
+                const bgr_buf = try alloc.alloc(u8, bgr_size);
+                defer alloc.free(bgr_buf);
+                var i: usize = 0;
+                while (i < alpha_buf.len) : (i += 1) {
+                    const a = alpha_buf[i];
+                    bgr_buf[i * 3 + 0] = a; // B
+                    bgr_buf[i * 3 + 1] = a; // G
+                    bgr_buf[i * 3 + 2] = a; // R
+                }
+                atlas.set(reg, bgr_buf);
+            },
+        }
 
         // offset_x: distance from left edge of cell to left edge of glyph
         // offset_y: distance from bottom of cell to top of glyph's bounding box
