@@ -1029,17 +1029,7 @@ const cell_text_ps =
     \\        atlas_color.GetDimensions(ts.x, ts.y);
     \\        float2 norm_tc = input.tex_coord / float2(ts.x, ts.y);
     \\        float4 color = atlas_color.Sample(atlas_sampler, norm_tc);
-    \\
-    \\        if (use_linear_blending)
-    \\            return color;
-    \\
-    \\        // Unlinearize
-    \\        if (color.a > 0.0) {
-    \\            color.rgb /= color.a;
-    \\            color = float4(unlinearize_channel(color.r), unlinearize_channel(color.g),
-    \\                           unlinearize_channel(color.b), color.a);
-    \\            color.rgb *= color.a;
-    \\        }
+    \\        // Color emoji: data is already premultiplied sRGB BGRA, return directly
     \\        return color;
     \\    }
     \\

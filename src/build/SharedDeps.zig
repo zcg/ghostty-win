@@ -602,6 +602,14 @@ pub fn add(
                 step.linkSystemLibrary2("shell32", .{});
                 if (self.config.font_backend.hasDirectwrite()) {
                     step.linkSystemLibrary2("dwrite", .{});
+                    step.linkSystemLibrary2("d2d1", .{});
+                    step.addCSourceFile(.{
+                        .file = b.path("src/font/directwrite/d2d_color_glyph.cpp"),
+                        .flags = &.{
+                            "-std=c++17",
+                            "-Wno-unused-command-line-argument",
+                        },
+                    });
                 }
                 switch (self.config.renderer) {
                     .d3d11 => {

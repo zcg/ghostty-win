@@ -31,6 +31,23 @@ const Style = font.Style;
 
 const log = std.log.scoped(.font_codepoint_resolver);
 
+fn defaultPresentation(cp: u32) Presentation {
+    if (uucode.get(.is_emoji_presentation, @intCast(cp))) return .emoji;
+
+    if (comptime builtin.os.tag == .windows) {
+        // Windows emoji fallback must prefer Segoe UI Emoji for pictographic
+        // ranges even when the runtime Unicode table reports text presentation.
+        if ((cp >= 0x1F000 and cp <= 0x1FAFF) or
+            (cp >= 0x2600 and cp <= 0x27BF) or
+            (cp >= 0x2300 and cp <= 0x23FF))
+        {
+            return .emoji;
+        }
+    }
+
+    return .text;
+}
+
 /// The underlying collection of fonts. This will be modified as
 /// new fonts are found via the resolver. The resolver takes ownership
 /// of the collection and will deinit it when it is deinitialized.
@@ -150,12 +167,11 @@ pub fn getIndex(
     // the default presentation. Note there is some inefficiency here because
     // we'll do this multiple times if we recurse, but this is a cached function
     // call higher up (GroupCache) so this should be rare.
-    const p_mode: Collection.PresentationMode = if (p) |v| .{ .explicit = v } else .{
-        .default = if (uucode.get(.is_emoji_presentation, @intCast(cp)))
-            .emoji
-        else
-            .text,
-    };
+    const p_default = defaultPresentation(cp);
+    const p_mode: Collection.PresentationMode = if (p) |v| .{ .explicit = v } else .{ .default = p_default };
+    if (cp >= 0x2300) {
+        log.info("codepoint presentation cp=0x{X} explicit={?} mode={}", .{ cp, p, p_mode });
+    }
 
     // If we can find the exact value, then return that.
     if (self.collection.getIndex(cp, style, p_mode)) |value| return value;

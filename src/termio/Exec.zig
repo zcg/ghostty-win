@@ -31,6 +31,10 @@ const ProcessInfo = @import("../pty.zig").ProcessInfo;
 
 const log = std.log.scoped(.io_exec);
 
+fn debugByte(bytes: []const u8, index: usize) u8 {
+    return if (index < bytes.len) bytes[index] else 0;
+}
+
 /// The termios poll rate in milliseconds.
 const TERMIOS_POLL_MS = 200;
 
@@ -414,6 +418,17 @@ pub fn queueWrite(
 
     // If our process is exited then we don't send any more writes.
     if (exec.exited) return;
+
+    if (data.len > 0) {
+        log.info("exec queue write len={} bytes={X:0>2} {X:0>2} {X:0>2} {X:0>2} linefeed={}", .{
+            data.len,
+            debugByte(data, 0),
+            debugByte(data, 1),
+            debugByte(data, 2),
+            debugByte(data, 3),
+            linefeed,
+        });
+    }
 
     // We go through and chunk the data if necessary to fit into
     // our cached buffers that we can queue to the stream.
@@ -1384,6 +1399,21 @@ pub const ReadThread = struct {
                             unreachable;
                         },
                     }
+                }
+
+                if (n > 0) {
+                    const data = buf[0..n];
+                    log.info("exec read output len={} bytes={X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2} {X:0>2}", .{
+                        data.len,
+                        debugByte(data, 0),
+                        debugByte(data, 1),
+                        debugByte(data, 2),
+                        debugByte(data, 3),
+                        debugByte(data, 4),
+                        debugByte(data, 5),
+                        debugByte(data, 6),
+                        debugByte(data, 7),
+                    });
                 }
 
                 @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });

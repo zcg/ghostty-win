@@ -77,9 +77,47 @@ pub const WM_DESTROY = 0x0002;
 pub const WM_PAINT = 0x000F;
 pub const WM_SIZE = 0x0005;
 pub const WM_KEYDOWN = 0x0100;
+pub const WM_KEYUP = 0x0101;
 pub const WM_CHAR = 0x0102;
+pub const WM_SYSKEYDOWN = 0x0104;
+pub const WM_SYSKEYUP = 0x0105;
+pub const WM_SYSCHAR = 0x0106;
+pub const WM_UNICHAR = 0x0109;
+pub const UNICODE_NOCHAR = 0xFFFF;
 pub const WM_USER = 0x0400;
 pub const WM_WAKEUP = WM_USER + 1;
+
+// Virtual-key codes
+pub const VK_BACK = 0x08;
+pub const VK_TAB = 0x09;
+pub const VK_RETURN = 0x0D;
+pub const VK_SHIFT = 0x10;
+pub const VK_CONTROL = 0x11;
+pub const VK_MENU = 0x12;
+pub const VK_PAUSE = 0x13;
+pub const VK_CAPITAL = 0x14;
+pub const VK_ESCAPE = 0x1B;
+pub const VK_SPACE = 0x20;
+pub const VK_PRIOR = 0x21;
+pub const VK_NEXT = 0x22;
+pub const VK_END = 0x23;
+pub const VK_HOME = 0x24;
+pub const VK_LEFT = 0x25;
+pub const VK_UP = 0x26;
+pub const VK_RIGHT = 0x27;
+pub const VK_DOWN = 0x28;
+pub const VK_INSERT = 0x2D;
+pub const VK_DELETE = 0x2E;
+pub const VK_LWIN = 0x5B;
+pub const VK_RWIN = 0x5C;
+pub const VK_NUMLOCK = 0x90;
+pub const VK_SCROLL = 0x91;
+pub const VK_LSHIFT = 0xA0;
+pub const VK_RSHIFT = 0xA1;
+pub const VK_LCONTROL = 0xA2;
+pub const VK_RCONTROL = 0xA3;
+pub const VK_LMENU = 0xA4;
+pub const VK_RMENU = 0xA5;
 
 // Window class styles
 pub const CS_HREDRAW = 0x0002;

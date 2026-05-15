@@ -206,7 +206,8 @@ pub const DWRITE_GLYPH_OFFSET = extern struct {
 };
 
 pub const DWRITE_GLYPH_RUN = extern struct {
-    font_face: *IDWriteFontFace,
+    // Use *anyopaque to allow IDWriteFontFace, IDWriteFontFace2, etc.
+    font_face: *anyopaque,
     font_em_size: f32,
     glyph_count: UINT32,
     glyph_indices: [*]const UINT16,
@@ -225,10 +226,23 @@ pub const DWRITE_MATRIX = extern struct {
     dy: f32,
 };
 
+pub const DWRITE_GLYPH_RUN_DESCRIPTION = extern struct {
+    locale_name: ?LPCWSTR,
+    string: ?LPCWSTR,
+    string_length: UINT32,
+    cluster_map: ?[*]const UINT16,
+    text_position: UINT32,
+};
+
 pub const DWRITE_TRIMMING = extern struct {
     granularity: c_int,
     delimiter: UINT32,
     delimiter_count: UINT32,
+};
+
+pub const SIZE = extern struct {
+    cx: c_long,
+    cy: c_long,
 };
 
 // ============================================================================
@@ -356,7 +370,7 @@ pub const IDWriteFactoryVTable = extern struct {
     UnregisterFontFileLoader: *const fn (*IDWriteFactory) callconv(.winapi) HRESULT,
     CreateTextFormat: *const fn (*IDWriteFactory) callconv(.winapi) HRESULT,
     CreateTypography: *const fn (*IDWriteFactory) callconv(.winapi) HRESULT,
-    GetGdiInterop: *const fn (*IDWriteFactory) callconv(.winapi) HRESULT,
+    GetGdiInterop: *const anyopaque,
     CreateTextLayout: *const fn (*IDWriteFactory) callconv(.winapi) HRESULT,
     CreateGdiCompatibleTextLayout: *const fn (*IDWriteFactory) callconv(.winapi) HRESULT,
     CreateEllipsisTrimmingSign: *const fn (*IDWriteFactory) callconv(.winapi) HRESULT,
@@ -1009,6 +1023,137 @@ pub const RECT = extern struct {
 
 pub const IID_IDWriteFactory = GUID.init(0xb859ee5a, 0xdb15, 0x450c, .{ 0x8d, 0x96, 0xfb, 0x16, 0x96, 0x64, 0x14, 0x48 });
 pub const IID_IDWriteFactory1 = GUID.init(0x30572f99, 0xdac6, 0x41db, .{ 0xa1, 0x6e, 0x04, 0x86, 0x30, 0x7e, 0x60, 0x6a });
+pub const IID_IDWriteFactory2 = GUID.init(0x0439fc60, 0xca6e, 0x4b65, .{ 0xb7, 0x23, 0x30, 0x5e, 0x28, 0x20, 0x80, 0xa5 });
+pub const IID_IDWriteFactory4 = GUID.init(0x4b0b5bd3, 0x0797, 0x4549, .{ 0x8a, 0xc5, 0xfe, 0x91, 0x5c, 0xc5, 0x38, 0x56 });
+pub const IID_IDWriteFontFace2 = GUID.init(0xd8b768ff, 0x64bc, 0x4e66, .{ 0x98, 0x2b, 0xec, 0x8e, 0x87, 0xf6, 0x93, 0xf7 });
+
+pub const DWRITE_E_NOCOLOR: HRESULT = @bitCast(@as(u32, 0x88985006));
+
+// IDWriteFactory2 is only used as a creation fallback. Color glyph drawing is
+// handled by Direct2D so we do not bind TranslateColorGlyphRun here.
+pub const IDWriteFactory2 = extern struct {
+    vtable: *const IDWriteFactory2VTable,
+
+    pub fn queryInterface(self: *IDWriteFactory2, riid: *const GUID, out: *?*anyopaque) HRESULT {
+        return self.vtable.QueryInterface(self, riid, out);
+    }
+
+    pub fn addRef(self: *IDWriteFactory2) u32 {
+        return self.vtable.AddRef(self);
+    }
+
+    pub fn release(self: *IDWriteFactory2) u32 {
+        return self.vtable.Release(self);
+    }
+};
+
+pub const IDWriteFactory2VTable = extern struct {
+    // IUnknown (0-2)
+    QueryInterface: *const fn (*IDWriteFactory2, *const GUID, *?*anyopaque) callconv(.winapi) HRESULT,
+    AddRef: *const fn (*IDWriteFactory2) callconv(.winapi) u32,
+    Release: *const fn (*IDWriteFactory2) callconv(.winapi) u32,
+    // IDWriteFactory (3-23)
+    GetSystemFontCollection: *const fn (*IDWriteFactory2, **IDWriteFontCollection, BOOL) callconv(.winapi) HRESULT,
+    CreateCustomFontCollection: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    RegisterFontCollectionLoader: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    UnregisterFontCollectionLoader: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateFontFileReference: *const fn (*IDWriteFactory2, LPCWSTR, ?*const anyopaque, **IDWriteFontFile) callconv(.winapi) HRESULT,
+    CreateCustomFontFileReference: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateFontFace: *const fn (*IDWriteFactory2, DWRITE_FONT_FACE_TYPE, UINT32, [*]const *IDWriteFontFile, UINT32, DWRITE_FONT_SIMULATIONS, **IDWriteFontFace) callconv(.winapi) HRESULT,
+    CreateRenderingParams: *const fn (*IDWriteFactory2, **IDWriteRenderingParams) callconv(.winapi) HRESULT,
+    CreateMonitorRenderingParams: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateCustomRenderingParams: *const fn (*IDWriteFactory2, f32, f32, f32, DWRITE_PIXEL_GEOMETRY, DWRITE_RENDERING_MODE, **IDWriteRenderingParams) callconv(.winapi) HRESULT,
+    RegisterFontFileLoader: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    UnregisterFontFileLoader: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateTextFormat: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateTypography: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    GetGdiInterop: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateTextLayout: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateGdiCompatibleTextLayout: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateEllipsisTrimmingSign: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateTextAnalyzer: *const fn (*IDWriteFactory2, **IDWriteTextAnalyzer) callconv(.winapi) HRESULT,
+    CreateNumberSubstitution: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateGlyphRunAnalysis: *const fn (*IDWriteFactory2, *const DWRITE_GLYPH_RUN, f32, ?*const DWRITE_MATRIX, DWRITE_RENDERING_MODE, DWRITE_MEASURING_MODE, f32, f32, **IDWriteGlyphRunAnalysis) callconv(.winapi) HRESULT,
+    // IDWriteFactory1 (24-25) -- stubbed; we don't call these
+    _pad24: *const anyopaque,
+    _pad25: *const anyopaque,
+    // IDWriteFactory2 (26-30)
+    GetSystemFontFallback2: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    CreateFontFallbackBuilder: *const fn (*IDWriteFactory2) callconv(.winapi) HRESULT,
+    TranslateColorGlyphRun: *const anyopaque,
+    CreateCustomRenderingParams2: *const anyopaque,
+    CreateGlyphRunAnalysis2: *const anyopaque,
+};
+
+// IDWriteFactory4 is requested at factory creation time so D2D/DWrite can use
+// modern color-font support internally. We do not call its color enumeration API.
+pub const IDWriteFactory4 = extern struct {
+    vtable: *const IDWriteFactory4VTable,
+
+    pub fn queryInterface(self: *IDWriteFactory4, riid: *const GUID, out: *?*anyopaque) HRESULT {
+        return self.vtable.QueryInterface(self, riid, out);
+    }
+
+    pub fn addRef(self: *IDWriteFactory4) u32 {
+        return self.vtable.AddRef(self);
+    }
+
+    pub fn release(self: *IDWriteFactory4) u32 {
+        return self.vtable.Release(self);
+    }
+};
+
+pub const IDWriteFactory4VTable = extern struct {
+    // IUnknown (0-2)
+    QueryInterface: *const fn (*IDWriteFactory4, *const GUID, *?*anyopaque) callconv(.winapi) HRESULT,
+    AddRef: *const fn (*IDWriteFactory4) callconv(.winapi) u32,
+    Release: *const fn (*IDWriteFactory4) callconv(.winapi) u32,
+    // IDWriteFactory (3-23) -- stubbed
+    _pad3: *const anyopaque,
+    _pad4: *const anyopaque,
+    _pad5: *const anyopaque,
+    _pad6: *const anyopaque,
+    _pad7: *const anyopaque,
+    _pad8: *const anyopaque,
+    _pad9: *const anyopaque,
+    _pad10: *const anyopaque,
+    _pad11: *const anyopaque,
+    _pad12: *const anyopaque,
+    _pad13: *const anyopaque,
+    _pad14: *const anyopaque,
+    _pad15: *const anyopaque,
+    _pad16: *const anyopaque,
+    _pad17: *const anyopaque,
+    _pad18: *const anyopaque,
+    _pad19: *const anyopaque,
+    _pad20: *const anyopaque,
+    _pad21: *const anyopaque,
+    _pad22: *const anyopaque,
+    _pad23: *const anyopaque,
+    // IDWriteFactory1 (24-25)
+    _pad24: *const anyopaque,
+    _pad25: *const anyopaque,
+    // IDWriteFactory2 (26-30)
+    _pad26: *const anyopaque,
+    _pad27: *const anyopaque,
+    _pad28: *const anyopaque,
+    _pad29: *const anyopaque,
+    _pad30: *const anyopaque,
+    // IDWriteFactory3 (31-39)
+    _pad31: *const anyopaque,
+    _pad32: *const anyopaque,
+    _pad33: *const anyopaque,
+    _pad34: *const anyopaque,
+    _pad35: *const anyopaque,
+    _pad36: *const anyopaque,
+    _pad37: *const anyopaque,
+    _pad38: *const anyopaque,
+    _pad39: *const anyopaque,
+    // IDWriteFactory4 (40-42)
+    TranslateColorGlyphRun: *const anyopaque,
+    _pad41: *const anyopaque,
+    _pad42: *const anyopaque,
+};
 
 // ============================================================================
 // Entry Point

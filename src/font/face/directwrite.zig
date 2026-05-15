@@ -10,6 +10,20 @@ const dw = @import("../directwrite/api.zig");
 
 const log = std.log.scoped(.font_face);
 
+extern "c" fn ghostty_dwrite_render_color_glyph_d2d(
+    glyph_run: *const dw.DWRITE_GLYPH_RUN,
+    dpi_x: f32,
+    dpi_y: f32,
+    baseline_origin_x: f32,
+    baseline_origin_y: f32,
+    measuring_mode: dw.DWRITE_MEASURING_MODE,
+    width: dw.UINT32,
+    height: dw.UINT32,
+    out_pixels: *anyopaque,
+    out_stride: dw.UINT32,
+    used_device_context7: *dw.UINT32,
+) callconv(.c) dw.HRESULT;
+
 /// Module-level cached DirectWrite factory. Thread-safe via mutex.
 var g_factory: ?*dw.IDWriteFactory = null;
 var g_factory_mutex: std.Thread.Mutex = .{};
@@ -22,8 +36,15 @@ fn getFactory() !*dw.IDWriteFactory {
         return f;
     }
     var factory_raw: *anyopaque = undefined;
-    // On Windows 8+, DWriteCreateFactory may require IDWriteFactory1.
-    const hr = dw.DWriteCreateFactory(.shared, &dw.IID_IDWriteFactory1, &factory_raw);
+    // Prefer IDWriteFactory4 so Windows 10/11 color glyph APIs are available,
+    // while keeping older factory interfaces as fallbacks.
+    var hr = dw.DWriteCreateFactory(.shared, &dw.IID_IDWriteFactory4, &factory_raw);
+    if (hr != dw.S_OK) {
+        hr = dw.DWriteCreateFactory(.shared, &dw.IID_IDWriteFactory2, &factory_raw);
+    }
+    if (hr != dw.S_OK) {
+        hr = dw.DWriteCreateFactory(.shared, &dw.IID_IDWriteFactory1, &factory_raw);
+    }
     if (hr != dw.S_OK) return error.FactoryCreationFailed;
     const factory: *dw.IDWriteFactory = @ptrCast(@alignCast(factory_raw));
     g_factory = factory;
@@ -78,24 +99,42 @@ pub const Face = struct {
         const tmp_dir = std.process.getEnvVarOwned(std.heap.page_allocator, "TEMP") catch "C:\\Windows\\Temp";
         defer std.heap.page_allocator.free(tmp_dir);
 
-        // Build temp file path using source pointer as unique ID
-        var tmp_path_buf: [260]u8 = undefined;
-        const tmp_file_path = std.fmt.bufPrint(
-            &tmp_path_buf,
-            "{s}\\ghostty_font_{x}.ttf",
-            .{ tmp_dir, @intFromPtr(source.ptr) },
+        // Open temp directory for file operations
+        var tmp_dir_handle = std.fs.openDirAbsolute(tmp_dir, .{}) catch {
+            log.warn("failed to open temp dir: {s}", .{tmp_dir});
+            return error.FontInitFailure;
+        };
+        defer tmp_dir_handle.close();
+
+        // Build temp file name using source pointer as unique ID
+        var tmp_name_buf: [64]u8 = undefined;
+        const tmp_file_name = std.fmt.bufPrint(
+            &tmp_name_buf,
+            "ghostty_font_{x}.ttf",
+            .{@intFromPtr(source.ptr)},
         ) catch {
-            log.warn("failed to format temp file path", .{});
+            log.warn("failed to format temp file name", .{});
             return error.FontInitFailure;
         };
 
         {
             // Delete existing file if it exists (may be locked from previous run)
-            std.fs.cwd().deleteFile(tmp_file_path) catch {};
-            const file = std.fs.cwd().createFile(tmp_file_path, .{ .truncate = true }) catch return error.FontInitFailure;
+            tmp_dir_handle.deleteFile(tmp_file_name) catch {};
+            const file = tmp_dir_handle.createFile(tmp_file_name, .{ .truncate = true }) catch return error.FontInitFailure;
             defer file.close();
             file.writeAll(source) catch return error.FontInitFailure;
         }
+
+        // Build full path for DirectWrite (needs absolute path)
+        var tmp_path_buf: [260]u8 = undefined;
+        const tmp_file_path = std.fmt.bufPrint(
+            &tmp_path_buf,
+            "{s}\\{s}",
+            .{ tmp_dir, tmp_file_name },
+        ) catch {
+            log.warn("failed to format temp file path", .{});
+            return error.FontInitFailure;
+        };
 
         // Convert path to UTF-16
         var wpath: [260:0]u16 = undefined;
@@ -238,7 +277,7 @@ pub const Face = struct {
                 // but HarfBuzz passes them in big-endian. Swap before calling.
                 const tag_le = @byteSwap(tag);
                 const hr = dw_face.tryGetFontTable(tag_le, &table_data, &table_size, &table_context, &exists);
-                const tag_str = [4]u8{@truncate(tag >> 24), @truncate(tag >> 16), @truncate(tag >> 8), @truncate(tag)};
+                const tag_str = [4]u8{ @truncate(tag >> 24), @truncate(tag >> 16), @truncate(tag >> 8), @truncate(tag) };
                 log.debug("hb table: {s} tag_be=0x{X} tag_le=0x{X} hr=0x{X} exists={} size={}", .{ &tag_str, tag, tag_le, @as(u32, @bitCast(hr)), exists, table_size });
                 if (hr != dw.S_OK or exists == dw.FALSE or table_data == null or table_size == 0) {
                     return null;
@@ -532,16 +571,32 @@ pub const Face = struct {
         // Create glyph run for analysis. Use the constrained baseline position.
         // DirectWrite font_em_size expects DIPs (1 DIP = 1/96 inch), not points (1 pt = 1/72 inch).
         const em_size_dips = self.size.points * 96.0 / 72.0;
+        // Some DirectWrite APIs require non-null glyph_advances even for single glyphs.
+        var glyph_advance_for_run: f32 = 0;
         const glyph_run = dw.DWRITE_GLYPH_RUN{
-            .font_face = self.font_face,
+            .font_face = @ptrCast(self.font_face),
             .font_em_size = em_size_dips,
             .glyph_count = 1,
             .glyph_indices = @ptrCast(&glyph_id_u16),
-            .glyph_advances = null,
+            .glyph_advances = @ptrCast(&glyph_advance_for_run),
             .glyph_offsets = null,
             .is_sideways = dw.FALSE,
             .bidi_level = 0,
         };
+
+        // Try Direct2D color glyph rendering for BGRA atlas. DirectWrite gives
+        // glyph analysis and color font data; Direct2D performs COLR v1 drawing.
+        if (atlas.format == .bgra) {
+            log.info(
+                "directwrite bgra glyph render start glyph={} em_size={d:.3} ppd={d:.3} advance={d:.3} color_state={}",
+                .{ glyph_index, em_size_dips, @as(f32, @floatFromInt(self.size.xdpi)) / 96.0, glyph_advance_for_run, self.color != null },
+            );
+            if (try self.renderColorGlyphD2D(alloc, factory, atlas, &glyph_run, metrics)) |glyph| {
+                log.info("directwrite bgra glyph render d2d success glyph={} result={}", .{ glyph_index, glyph });
+                return glyph;
+            }
+            log.warn("directwrite bgra glyph render d2d failed glyph={}, falling back to monochrome outline", .{glyph_index});
+        }
 
         var analysis: *dw.IDWriteGlyphRunAnalysis = undefined;
         const hr2 = factory.createGlyphRunAnalysis(
@@ -566,7 +621,6 @@ pub const Face = struct {
         const tex_height = bounds.height();
 
         if (tex_width <= 0 or tex_height <= 0) {
-            log.warn("renderGlyph: glyph={} has zero size bounds={},{},{},{}", .{ glyph_index, bounds.left, bounds.top, bounds.right, bounds.bottom });
             return font.Glyph{
                 .width = 0,
                 .height = 0,
@@ -636,6 +690,160 @@ pub const Face = struct {
             .height = @intCast(tex_height),
             .offset_x = offset_x,
             .offset_y = offset_y,
+            .atlas_x = reg.x,
+            .atlas_y = reg.y,
+        };
+    }
+
+    fn renderColorGlyphD2D(
+        self: Face,
+        alloc: Allocator,
+        factory: *dw.IDWriteFactory,
+        atlas: *font.Atlas,
+        glyph_run: *const dw.DWRITE_GLYPH_RUN,
+        metrics: font.Metrics,
+    ) !?font.Glyph {
+        const pixels_per_dip = @as(f32, @floatFromInt(self.size.ydpi)) / 96.0;
+        var analysis: *dw.IDWriteGlyphRunAnalysis = undefined;
+        const hr_analysis = factory.createGlyphRunAnalysis(
+            glyph_run,
+            pixels_per_dip,
+            null,
+            .aliased,
+            .natural,
+            0.0,
+            0.0,
+            &analysis,
+        );
+        if (hr_analysis != dw.S_OK) {
+            log.warn("directwrite color bitmap CreateGlyphRunAnalysis failed hr=0x{X:0>8}", .{@as(u32, @bitCast(hr_analysis))});
+            return null;
+        }
+        defer _ = analysis.release();
+
+        var bounds: dw.RECT = undefined;
+        const hr_bounds = analysis.getAlphaTextureBounds(.aliased, &bounds);
+        if (hr_bounds != dw.S_OK) {
+            log.warn("directwrite color bitmap GetAlphaTextureBounds failed hr=0x{X:0>8}", .{@as(u32, @bitCast(hr_bounds))});
+            return null;
+        }
+
+        const width_i32 = bounds.width();
+        const height_i32 = bounds.height();
+        if (width_i32 <= 0 or height_i32 <= 0) {
+            log.warn("directwrite color bitmap empty alpha bounds bounds={},{},{},{}", .{ bounds.left, bounds.top, bounds.right, bounds.bottom });
+            return null;
+        }
+
+        const width: u32 = @intCast(width_i32);
+        const height: u32 = @intCast(height_i32);
+        const padding: u32 = 4;
+        const surface_width = width + padding * 2;
+        const surface_height = height + padding * 2;
+
+        const pixel_count = @as(usize, surface_width) * @as(usize, surface_height);
+        const bitmap_bytes = try alloc.alloc(u8, pixel_count * 4);
+        defer alloc.free(bitmap_bytes);
+        @memset(bitmap_bytes, 0);
+
+        var used_device_context7: dw.UINT32 = 0;
+        const dpi_x = @as(f32, @floatFromInt(self.size.xdpi));
+        const dpi_y = @as(f32, @floatFromInt(self.size.ydpi));
+        const origin_x = @as(f32, @floatFromInt(padding)) - @as(f32, @floatFromInt(bounds.left));
+        const origin_y = @as(f32, @floatFromInt(padding)) - @as(f32, @floatFromInt(bounds.top));
+        const hr_d2d = ghostty_dwrite_render_color_glyph_d2d(
+            glyph_run,
+            dpi_x,
+            dpi_y,
+            origin_x,
+            origin_y,
+            .natural,
+            surface_width,
+            surface_height,
+            bitmap_bytes.ptr,
+            surface_width * 4,
+            &used_device_context7,
+        );
+
+        log.info("directwrite color d2d draw glyph={} hr=0x{X:0>8} target7={} ppd={d:.3} bounds={},{},{},{} origin={d:.3},{d:.3} surface={}x{}", .{
+            glyph_run.glyph_indices[0],
+            @as(u32, @bitCast(hr_d2d)),
+            used_device_context7,
+            pixels_per_dip,
+            bounds.left,
+            bounds.top,
+            bounds.right,
+            bounds.bottom,
+            origin_x,
+            origin_y,
+            surface_width,
+            surface_height,
+        });
+        if (hr_d2d != dw.S_OK) {
+            return null;
+        }
+
+        var min_x: u32 = surface_width;
+        var min_y: u32 = surface_height;
+        var max_x: u32 = 0;
+        var max_y: u32 = 0;
+        var found = false;
+        var colored_pixels: u32 = 0;
+        var whiteish_pixels: u32 = 0;
+
+        var yy: u32 = 0;
+        while (yy < surface_height) : (yy += 1) {
+            var xx: u32 = 0;
+            while (xx < surface_width) : (xx += 1) {
+                const idx = (@as(usize, yy) * surface_width + xx) * 4;
+                if (bitmap_bytes[idx + 3] == 0) continue;
+                found = true;
+                const b = bitmap_bytes[idx + 0];
+                const g = bitmap_bytes[idx + 1];
+                const r = bitmap_bytes[idx + 2];
+                const max_channel = @max(r, @max(g, b));
+                const min_channel = @min(r, @min(g, b));
+                if (max_channel > 80 and max_channel - min_channel > 24) colored_pixels += 1;
+                if (r > 200 and g > 200 and b > 200) whiteish_pixels += 1;
+                min_x = @min(min_x, xx);
+                min_y = @min(min_y, yy);
+                max_x = @max(max_x, xx + 1);
+                max_y = @max(max_y, yy + 1);
+            }
+        }
+
+        log.info("directwrite color d2d scan found={} colored={} whiteish={} bounds={},{},{},{}", .{
+            found,
+            colored_pixels,
+            whiteish_pixels,
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        });
+
+        if (!found or min_x >= max_x or min_y >= max_y) return null;
+        const out_width = max_x - min_x;
+        const out_height = max_y - min_y;
+        const out = try alloc.alloc(u8, @as(usize, out_width) * @as(usize, out_height) * 4);
+        defer alloc.free(out);
+
+        yy = 0;
+        while (yy < out_height) : (yy += 1) {
+            const src_offset = (@as(usize, min_y + yy) * surface_width + min_x) * 4;
+            const dst_offset = @as(usize, yy) * out_width * 4;
+            @memcpy(out[dst_offset .. dst_offset + @as(usize, out_width) * 4], bitmap_bytes[src_offset .. src_offset + @as(usize, out_width) * 4]);
+        }
+
+        const reg = try atlas.reserve(alloc, out_width, out_height);
+        atlas.set(reg, out);
+
+        return font.Glyph{
+            .width = out_width,
+            .height = out_height,
+            .offset_x = bounds.left + @as(i32, @intCast(min_x)) - @as(i32, @intCast(padding)),
+            .offset_y = @as(i32, @intCast(metrics.cell_baseline)) -
+                (bounds.top + @as(i32, @intCast(min_y)) - @as(i32, @intCast(padding))),
             .atlas_x = reg.x,
             .atlas_y = reg.y,
         };
@@ -883,6 +1091,7 @@ pub const Face = struct {
 /// Color state for detecting color glyphs
 const ColorState = struct {
     sbix: bool,
+    colr: bool,
     svg: ?opentype.SVG,
     svg_data: ?[]const u8,
 
@@ -891,6 +1100,9 @@ const ColorState = struct {
     pub fn init(face: *dw.IDWriteFontFace) Error!?ColorState {
         // Check for sbix table
         const sbix = hasTable(face, "sbix");
+
+        // Check for COLR table (Windows color glyph layers)
+        const colr = hasTable(face, "COLR");
 
         // Check for SVG table
         const svg = svg: {
@@ -910,6 +1122,7 @@ const ColorState = struct {
 
         return .{
             .sbix = sbix,
+            .colr = colr,
             .svg = if (svg) |v| v.svg else null,
             .svg_data = if (svg) |v| v.data else null,
         };
@@ -923,6 +1136,7 @@ const ColorState = struct {
     pub fn isColorGlyph(self: *const ColorState, glyph_id: u32) bool {
         const glyph_u16 = std.math.cast(u16, glyph_id) orelse return false;
         if (self.sbix) return true;
+        if (self.colr) return true;
         if (self.svg) |svg| {
             if (svg.hasGlyph(glyph_u16)) return true;
         }

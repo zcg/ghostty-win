@@ -38,7 +38,12 @@ const WM_CLOSE = sys.WM_CLOSE;
 const WM_SIZE = sys.WM_SIZE;
 const WM_PAINT = sys.WM_PAINT;
 const WM_KEYDOWN = sys.WM_KEYDOWN;
+const WM_KEYUP = sys.WM_KEYUP;
 const WM_CHAR = sys.WM_CHAR;
+const WM_SYSKEYDOWN = sys.WM_SYSKEYDOWN;
+const WM_SYSKEYUP = sys.WM_SYSKEYUP;
+const WM_SYSCHAR = sys.WM_SYSCHAR;
+const WM_UNICHAR = sys.WM_UNICHAR;
 const WM_COPYDATA = sys.WM_COPYDATA;
 const WM_WAKEUP = sys.WM_WAKEUP;
 const COPYDATASTRUCT = sys.COPYDATASTRUCT;
@@ -1076,57 +1081,362 @@ fn showNotification(self: *App, hwnd: HWND, title: [:0]const u8, body: [:0]const
 // Input helpers
 // ============================================================================
 
-extern "user32" fn GetKeyState(nVirtKey: c_int) callconv(.winapi) i16;
-
 fn getModifiers() @import("../../input.zig").Mods {
     const input = @import("../../input.zig");
     var mods: input.Mods = .{};
-    if (GetKeyState(0x10) < 0) {
+    if (sys.GetKeyState(sys.VK_SHIFT) < 0) {
         mods.shift = true;
-        mods.sides.shift = if (GetKeyState(0xA1) < 0) .right else .left;
+        mods.sides.shift = if (sys.GetKeyState(sys.VK_RSHIFT) < 0) .right else .left;
     }
-    if (GetKeyState(0x11) < 0) {
+    if (sys.GetKeyState(sys.VK_CONTROL) < 0) {
         mods.ctrl = true;
-        mods.sides.ctrl = if (GetKeyState(0xA3) < 0) .right else .left;
+        mods.sides.ctrl = if (sys.GetKeyState(sys.VK_RCONTROL) < 0) .right else .left;
     }
-    if (GetKeyState(0x12) < 0) {
+    if (sys.GetKeyState(sys.VK_MENU) < 0) {
         mods.alt = true;
-        mods.sides.alt = if (GetKeyState(0xA5) < 0) .right else .left;
+        mods.sides.alt = if (sys.GetKeyState(sys.VK_RMENU) < 0) .right else .left;
     }
-    if (GetKeyState(0x5B) < 0 or GetKeyState(0x5C) < 0) {
+    if (sys.GetKeyState(sys.VK_LWIN) < 0 or sys.GetKeyState(sys.VK_RWIN) < 0) {
         mods.super = true;
-        mods.sides.super = if (GetKeyState(0x5C) < 0) .right else .left;
+        mods.sides.super = if (sys.GetKeyState(sys.VK_RWIN) < 0) .right else .left;
     }
     return mods;
 }
 
-fn handleTextInput(surface: *Surface, msg: UINT, wparam: WPARAM) LRESULT {
-    _ = msg;
+fn isValidUnicodeScalar(codepoint: u32) bool {
+    return codepoint <= 0x10FFFF and !(codepoint >= 0xD800 and codepoint <= 0xDFFF);
+}
+
+fn debugByte(bytes: []const u8, index: usize) u8 {
+    return if (index < bytes.len) bytes[index] else 0;
+}
+
+fn win32InputControlKeyState(lparam: LPARAM) u32 {
+    var state: u32 = 0;
+    if (sys.GetKeyState(sys.VK_RMENU) < 0) state |= 0x0001;
+    if (sys.GetKeyState(sys.VK_LMENU) < 0) state |= 0x0002;
+    if (sys.GetKeyState(sys.VK_RCONTROL) < 0) state |= 0x0004;
+    if (sys.GetKeyState(sys.VK_LCONTROL) < 0) state |= 0x0008;
+    if (sys.GetKeyState(sys.VK_SHIFT) < 0) state |= 0x0010;
+    if (sys.GetKeyState(sys.VK_NUMLOCK) & 1 != 0) state |= 0x0020;
+    if (sys.GetKeyState(sys.VK_SCROLL) & 1 != 0) state |= 0x0040;
+    if (sys.GetKeyState(sys.VK_CAPITAL) & 1 != 0) state |= 0x0080;
+    if ((@as(usize, @bitCast(lparam)) & (1 << 24)) != 0) state |= 0x0100;
+    return state;
+}
+
+const Win32InputEvent = struct {
+    vk: u16,
+    scan: u16,
+    unicode_char: u16,
+    key_down: bool,
+    control_state: u32,
+    repeat_count: u16,
+};
+
+fn win32InputEventFromMessage(
+    msg: UINT,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    unicode_char: u16,
+) Win32InputEvent {
+    const lp: usize = @bitCast(lparam);
+    const repeat_count: u16 = @max(1, @as(u16, @intCast(lp & 0xFFFF)));
+    const scan_code: u16 = @intCast((lp >> 16) & 0xFF);
+    const key_down = switch (msg) {
+        WM_KEYUP, WM_SYSKEYUP => false,
+        else => (lp & (1 << 31)) == 0,
+    };
+
+    return .{
+        .vk = @intCast(wparam & 0xFFFF),
+        .scan = scan_code,
+        .unicode_char = unicode_char,
+        .key_down = key_down,
+        .control_state = win32InputControlKeyState(lparam),
+        .repeat_count = repeat_count,
+    };
+}
+
+fn sendWin32Input(
+    core: *CoreSurface,
+    event: Win32InputEvent,
+) void {
+    var buf: [96]u8 = undefined;
+    const seq = std.fmt.bufPrint(
+        &buf,
+        "\x1B[{};{};{};{};{};{}_",
+        .{
+            @as(u32, event.vk),
+            @as(u32, event.scan),
+            @as(u32, event.unicode_char),
+            @intFromBool(event.key_down),
+            event.control_state,
+            @as(u32, event.repeat_count),
+        },
+    ) catch return;
+
+    log.info("win32 input mode dispatch vk=0x{X:0>2} scan=0x{X:0>2} uc=0x{X:0>4} down={} control_state=0x{X} repeat={} seq_len={}", .{
+        event.vk,
+        event.scan,
+        event.unicode_char,
+        event.key_down,
+        event.control_state,
+        event.repeat_count,
+        seq.len,
+    });
+    core.rawInputCallback(seq) catch |err| {
+        log.err("raw win32 input callback error: {}", .{err});
+    };
+}
+
+fn sendWin32InputCodeUnit(
+    surface: *Surface,
+    core: *CoreSurface,
+    msg: UINT,
+    lparam: LPARAM,
+    code_unit: u16,
+) void {
+    if (surface.pending_win32_input_key) {
+        const event: Win32InputEvent = .{
+            .vk = surface.pending_win32_input_vk,
+            .scan = surface.pending_win32_input_scan,
+            .unicode_char = code_unit,
+            .key_down = true,
+            .control_state = surface.pending_win32_input_control_state,
+            .repeat_count = surface.pending_win32_input_repeat_count,
+        };
+        surface.pending_win32_input_key = false;
+        sendWin32Input(core, event);
+    } else {
+        var event = win32InputEventFromMessage(msg, 0, lparam, code_unit);
+        event.scan = 0;
+        sendWin32Input(core, event);
+    }
+}
+
+fn flushPendingWin32Input(surface: *Surface, core: *CoreSurface) void {
+    if (!surface.pending_win32_input_key) return;
+
+    const event: Win32InputEvent = .{
+        .vk = surface.pending_win32_input_vk,
+        .scan = surface.pending_win32_input_scan,
+        .unicode_char = 0,
+        .key_down = true,
+        .control_state = surface.pending_win32_input_control_state,
+        .repeat_count = surface.pending_win32_input_repeat_count,
+    };
+    surface.pending_win32_input_key = false;
+    sendWin32Input(core, event);
+}
+
+fn isWin32ModifierVirtualKey(vk: WPARAM) bool {
+    return switch (vk) {
+        sys.VK_SHIFT,
+        sys.VK_CONTROL,
+        sys.VK_MENU,
+        sys.VK_LSHIFT,
+        sys.VK_RSHIFT,
+        sys.VK_LCONTROL,
+        sys.VK_RCONTROL,
+        sys.VK_LMENU,
+        sys.VK_RMENU,
+        sys.VK_LWIN,
+        sys.VK_RWIN,
+        => true,
+        else => false,
+    };
+}
+
+fn mayProduceWin32Char(vk: WPARAM) bool {
+    return switch (vk) {
+        sys.VK_BACK,
+        sys.VK_TAB,
+        sys.VK_RETURN,
+        sys.VK_ESCAPE,
+        sys.VK_SPACE,
+        0x30...0x39,
+        0x41...0x5A,
+        0x60...0x6F,
+        0xBA...0xC0,
+        0xDB...0xDF,
+        => true,
+        else => false,
+    };
+}
+
+fn deferWin32KeyForChar(msg: UINT, wparam: WPARAM) bool {
+    if (msg != WM_KEYDOWN and msg != WM_SYSKEYDOWN) return false;
+    if (isWin32ModifierVirtualKey(wparam)) return false;
+    return mayProduceWin32Char(wparam);
+}
+
+fn unshiftedCodepointFromVirtualKey(wparam: WPARAM) u21 {
+    return switch (wparam) {
+        0x41...0x5A => @intCast(wparam + 32),
+        0x30...0x39 => @intCast(wparam),
+        0x20 => ' ',
+        0xBD => '-',
+        0xBB => '=',
+        0xDB => '[',
+        0xDD => ']',
+        0xDC => '\\',
+        0xBA => ';',
+        0xDE => '\'',
+        0xBC => ',',
+        0xBE => '.',
+        0xBF => '/',
+        0xC0 => '`',
+        else => 0,
+    };
+}
+
+fn tryHandleGhosttyKeybinding(
+    core: *CoreSurface,
+    action: @import("../../input.zig").Action,
+    key: @import("../../input.zig").Key,
+    mods: @import("../../input.zig").Mods,
+    wparam: WPARAM,
+) bool {
+    if (key == .unidentified) return false;
+
+    const input = @import("../../input.zig");
+    const event = input.KeyEvent{
+        .action = action,
+        .key = key,
+        .mods = mods,
+        .unshifted_codepoint = if (action == .release) 0 else unshiftedCodepointFromVirtualKey(wparam),
+    };
+
+    const should_process = switch (action) {
+        .release => true,
+        .press, .repeat => core.keyEventIsBinding(event) != null,
+    };
+    if (!should_process) return false;
+
+    const effect = core.keyCallback(event) catch |err| {
+        log.err("key callback error: {}", .{err});
+        return false;
+    };
+    return effect == .consumed or effect == .closed;
+}
+
+fn handleWin32KeyInput(surface: *Surface, msg: UINT, wparam: WPARAM, lparam: LPARAM) bool {
+    const core = surface.core_surface orelse return false;
+    if (!core.win32InputModeEnabled()) return false;
+
+    surface.pending_high_surrogate = null;
+    const mods = getModifiers();
+    const key = mapVirtualKey(wparam);
+
+    if (msg == WM_KEYUP or msg == WM_SYSKEYUP) {
+        flushPendingWin32Input(surface, core);
+        if (tryHandleGhosttyKeybinding(core, .release, key, mods, wparam)) return true;
+        sendWin32Input(core, win32InputEventFromMessage(msg, wparam, lparam, 0));
+        return true;
+    }
+
+    flushPendingWin32Input(surface, core);
+
+    if (tryHandleGhosttyKeybinding(core, .press, key, mods, wparam)) return true;
+
+    const event = win32InputEventFromMessage(msg, wparam, lparam, 0);
+    if (deferWin32KeyForChar(msg, wparam)) {
+        surface.pending_win32_input_key = true;
+        surface.pending_win32_input_vk = event.vk;
+        surface.pending_win32_input_scan = event.scan;
+        surface.pending_win32_input_control_state = event.control_state;
+        surface.pending_win32_input_repeat_count = event.repeat_count;
+        log.info("win32 input mode pending text key vk=0x{X:0>2} scan=0x{X:0>2} control_state=0x{X} repeat={}", .{
+            event.vk,
+            event.scan,
+            event.control_state,
+            event.repeat_count,
+        });
+        return true;
+    }
+
+    sendWin32Input(core, event);
+    return true;
+}
+
+fn handleTextInput(surface: *Surface, msg: UINT, wparam: WPARAM, lparam: LPARAM) LRESULT {
+    if (msg == WM_UNICHAR and wparam == sys.UNICODE_NOCHAR) {
+        log.info("win32 text input WM_UNICHAR probe accepted", .{});
+        return 1;
+    }
+
     if (surface.core_surface) |core| {
         const mods = getModifiers();
+        const win32_input_mode = core.win32InputModeEnabled();
 
-        // Handle UTF-16 surrogate pairs for characters outside BMP (emoji, etc.)
-        const codepoint: u21 = cp: {
-            const wc: u16 = @intCast(wparam);
-            if (wc >= 0xD800 and wc <= 0xDBFF) {
-                // High surrogate - save and wait for low surrogate
-                surface.pending_high_surrogate = wc;
+        log.info("win32 text input msg=0x{X:0>4} wparam=0x{X}", .{
+            msg,
+            wparam,
+        });
+
+        const codepoint_u32: u32 = cp: {
+            if (msg == WM_UNICHAR) {
+                const cp32: u32 = @intCast(wparam);
+                surface.pending_high_surrogate = null;
+                if (!isValidUnicodeScalar(cp32)) {
+                    log.warn("win32 text input invalid WM_UNICHAR codepoint=0x{X}", .{cp32});
+                    return 0;
+                }
+                if (win32_input_mode) {
+                    if (cp32 >= 0x10000) {
+                        const scalar = cp32 - 0x10000;
+                        sendWin32InputCodeUnit(surface, core, msg, lparam, @intCast(0xD800 + (scalar >> 10)));
+                        sendWin32InputCodeUnit(surface, core, msg, lparam, @intCast(0xDC00 + (scalar & 0x3FF)));
+                    } else {
+                        sendWin32InputCodeUnit(surface, core, msg, lparam, @intCast(cp32));
+                    }
+                    return 0;
+                }
+                break :cp cp32;
+            }
+
+            const wc: u16 = @intCast(wparam & 0xFFFF);
+            if (win32_input_mode) {
+                surface.pending_high_surrogate = null;
+                sendWin32InputCodeUnit(surface, core, msg, lparam, wc);
                 return 0;
-            } else if (wc >= 0xDC00 and wc <= 0xDFFF) {
-                // Low surrogate - combine with pending high surrogate
-                const high = surface.pending_high_surrogate orelse return 0;
+            }
+
+            if (wc >= 0xD800 and wc <= 0xDBFF) {
+                surface.pending_high_surrogate = wc;
+                log.info("win32 text input high surrogate=0x{X:0>4}", .{wc});
+                return 0;
+            }
+
+            if (wc >= 0xDC00 and wc <= 0xDFFF) {
+                const high = surface.pending_high_surrogate orelse {
+                    log.warn("win32 text input low surrogate without high=0x{X:0>4}", .{wc});
+                    return 0;
+                };
                 surface.pending_high_surrogate = null;
                 const hi: u32 = high - 0xD800;
                 const lo: u32 = wc - 0xDC00;
-                break :cp @intCast(0x10000 + (hi << 10) + lo);
-            } else {
-                // Regular BMP character
-                surface.pending_high_surrogate = null;
-                break :cp wc;
+                const cp32: u32 = 0x10000 + (hi << 10) + lo;
+                log.info("win32 text input surrogate pair high=0x{X:0>4} low=0x{X:0>4} cp=0x{X}", .{
+                    high,
+                    wc,
+                    cp32,
+                });
+                break :cp cp32;
             }
+
+            surface.pending_high_surrogate = null;
+            break :cp wc;
         };
 
-        if (codepoint < 0x20 or codepoint == 0x7f) return 0;
+        if (codepoint_u32 < 0x20 or codepoint_u32 == 0x7f) return 0;
+        if (!isValidUnicodeScalar(codepoint_u32)) {
+            log.warn("win32 text input invalid codepoint=0x{X}", .{codepoint_u32});
+            return 0;
+        }
+
+        const codepoint: u21 = @intCast(codepoint_u32);
         var utf8_buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(codepoint, &utf8_buf) catch 0;
         if (len > 0) {
@@ -1141,6 +1451,16 @@ fn handleTextInput(surface: *Surface, msg: UINT, wparam: WPARAM) LRESULT {
                 consumed_mods.ctrl = true;
                 consumed_mods.alt = true;
             }
+
+            const utf8 = utf8_buf[0..len];
+            log.info("win32 text input dispatch cp=0x{X} utf8_len={} utf8={X:0>2} {X:0>2} {X:0>2} {X:0>2}", .{
+                codepoint_u32,
+                utf8.len,
+                debugByte(utf8, 0),
+                debugByte(utf8, 1),
+                debugByte(utf8, 2),
+                debugByte(utf8, 3),
+            });
 
             const event = input.KeyEvent{
                 .action = .press,
@@ -1193,16 +1513,42 @@ fn shouldDispatchKeyPress(vk: WPARAM, mods: @import("../../input.zig").Mods) boo
 
 fn mapVirtualKey(vk: WPARAM) @import("../../input.zig").Key {
     return switch (vk) {
-        0x41 => .key_a, 0x42 => .key_b, 0x43 => .key_c, 0x44 => .key_d,
-        0x45 => .key_e, 0x46 => .key_f, 0x47 => .key_g, 0x48 => .key_h,
-        0x49 => .key_i, 0x4A => .key_j, 0x4B => .key_k, 0x4C => .key_l,
-        0x4D => .key_m, 0x4E => .key_n, 0x4F => .key_o, 0x50 => .key_p,
-        0x51 => .key_q, 0x52 => .key_r, 0x53 => .key_s, 0x54 => .key_t,
-        0x55 => .key_u, 0x56 => .key_v, 0x57 => .key_w, 0x58 => .key_x,
-        0x59 => .key_y, 0x5A => .key_z,
-        0x30 => .digit_0, 0x31 => .digit_1, 0x32 => .digit_2, 0x33 => .digit_3,
-        0x34 => .digit_4, 0x35 => .digit_5, 0x36 => .digit_6, 0x37 => .digit_7,
-        0x38 => .digit_8, 0x39 => .digit_9,
+        0x41 => .key_a,
+        0x42 => .key_b,
+        0x43 => .key_c,
+        0x44 => .key_d,
+        0x45 => .key_e,
+        0x46 => .key_f,
+        0x47 => .key_g,
+        0x48 => .key_h,
+        0x49 => .key_i,
+        0x4A => .key_j,
+        0x4B => .key_k,
+        0x4C => .key_l,
+        0x4D => .key_m,
+        0x4E => .key_n,
+        0x4F => .key_o,
+        0x50 => .key_p,
+        0x51 => .key_q,
+        0x52 => .key_r,
+        0x53 => .key_s,
+        0x54 => .key_t,
+        0x55 => .key_u,
+        0x56 => .key_v,
+        0x57 => .key_w,
+        0x58 => .key_x,
+        0x59 => .key_y,
+        0x5A => .key_z,
+        0x30 => .digit_0,
+        0x31 => .digit_1,
+        0x32 => .digit_2,
+        0x33 => .digit_3,
+        0x34 => .digit_4,
+        0x35 => .digit_5,
+        0x36 => .digit_6,
+        0x37 => .digit_7,
+        0x38 => .digit_8,
+        0x39 => .digit_9,
         0x08 => .backspace,
         0x09 => .tab,
         0x0D => .enter,
@@ -1231,9 +1577,18 @@ fn mapVirtualKey(vk: WPARAM) @import("../../input.zig").Key {
         0xBC => .comma,
         0xBE => .period,
         0xBF => .slash,
-        0x70 => .f1, 0x71 => .f2, 0x72 => .f3, 0x73 => .f4,
-        0x74 => .f5, 0x75 => .f6, 0x76 => .f7, 0x77 => .f8,
-        0x78 => .f9, 0x79 => .f10, 0x7A => .f11, 0x7B => .f12,
+        0x70 => .f1,
+        0x71 => .f2,
+        0x72 => .f3,
+        0x73 => .f4,
+        0x74 => .f5,
+        0x75 => .f6,
+        0x76 => .f7,
+        0x77 => .f8,
+        0x78 => .f9,
+        0x79 => .f10,
+        0x7A => .f11,
+        0x7B => .f12,
         else => .unidentified,
     };
 }
@@ -1374,36 +1729,21 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
             }
             return 0;
         },
-        WM_CHAR, 0x0106 => return handleTextInput(surface, msg, wparam),
-        WM_KEYDOWN, 0x0104 => {
+        WM_CHAR, WM_SYSCHAR, WM_UNICHAR => return handleTextInput(surface, msg, wparam, lparam),
+        WM_KEYDOWN, WM_SYSKEYDOWN => {
+            if (handleWin32KeyInput(surface, msg, wparam, lparam)) return 0;
+
             if (surface.core_surface) |core| {
                 const mods = getModifiers();
                 if (!shouldDispatchKeyPress(wparam, mods)) return sys.DefWindowProcW(hwnd, msg, wparam, lparam);
                 const key = mapVirtualKey(wparam);
                 if (key != .unidentified) {
                     const input = @import("../../input.zig");
-                    const unshifted: u21 = switch (wparam) {
-                        0x41...0x5A => @intCast(wparam + 32),
-                        0x30...0x39 => @intCast(wparam),
-                        0x20 => ' ',
-                        0xBD => '-',
-                        0xBB => '=',
-                        0xDB => '[',
-                        0xDD => ']',
-                        0xDC => '\\',
-                        0xBA => ';',
-                        0xDE => '\'',
-                        0xBC => ',',
-                        0xBE => '.',
-                        0xBF => '/',
-                        0xC0 => '`',
-                        else => 0,
-                    };
                     const event = input.KeyEvent{
                         .action = .press,
                         .key = key,
                         .mods = mods,
-                        .unshifted_codepoint = unshifted,
+                        .unshifted_codepoint = unshiftedCodepointFromVirtualKey(wparam),
                     };
                     const effect = core.keyCallback(event) catch |err| {
                         log.err("key callback error: {}", .{err});
@@ -1414,7 +1754,9 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
             }
             return sys.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
-        0x0101, 0x0105 => {
+        WM_KEYUP, WM_SYSKEYUP => {
+            if (handleWin32KeyInput(surface, msg, wparam, lparam)) return 0;
+
             if (surface.core_surface) |core| {
                 const mods = getModifiers();
                 const key = mapVirtualKey(wparam);

@@ -40,6 +40,10 @@ const ProcessInfo = @import("pty.zig").ProcessInfo;
 
 const log = std.log.scoped(.surface);
 
+fn debugByte(bytes: []const u8, index: usize) u8 {
+    return if (index < bytes.len) bytes[index] else 0;
+}
+
 // The renderer implementation to use.
 const Renderer = rendererpkg.Renderer;
 
@@ -3176,6 +3180,20 @@ fn encodeKey(
 
             // Special-case: we did nothing.
             if (written.len == 0) return null;
+            if (event.utf8.len > 0) {
+                log.info("surface encode key utf8_len={} utf8={X:0>2} {X:0>2} {X:0>2} {X:0>2} pty_len={} pty={X:0>2} {X:0>2} {X:0>2} {X:0>2}", .{
+                    event.utf8.len,
+                    debugByte(event.utf8, 0),
+                    debugByte(event.utf8, 1),
+                    debugByte(event.utf8, 2),
+                    debugByte(event.utf8, 3),
+                    written.len,
+                    debugByte(written, 0),
+                    debugByte(written, 1),
+                    debugByte(written, 2),
+                    debugByte(written, 3),
+                });
+            }
 
             break :req .{ .small = .{
                 .data = data,
@@ -3205,6 +3223,21 @@ fn encodeKey(
             event,
             encoding_opts,
         );
+        if (event.utf8.len > 0) {
+            const written = alloc_writer.writer.buffered();
+            log.info("surface encode key allocated utf8_len={} utf8={X:0>2} {X:0>2} {X:0>2} {X:0>2} pty_len={} pty={X:0>2} {X:0>2} {X:0>2} {X:0>2}", .{
+                event.utf8.len,
+                debugByte(event.utf8, 0),
+                debugByte(event.utf8, 1),
+                debugByte(event.utf8, 2),
+                debugByte(event.utf8, 3),
+                written.len,
+                debugByte(written, 0),
+                debugByte(written, 1),
+                debugByte(written, 2),
+                debugByte(written, 3),
+            });
+        }
         break :req try termio.Message.WriteReq.init(
             self.alloc,
             alloc_writer.writer.buffered(),
@@ -3261,6 +3294,22 @@ pub fn textCallback(self: *Surface, text: []const u8) !void {
     defer crash.sentry.thread_state = null;
 
     try self.completeClipboardPaste(text, true);
+}
+
+pub fn win32InputModeEnabled(self: *Surface) bool {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+    return self.io.terminal.modes.get(.win32_input_mode);
+}
+
+/// Sends bytes to the terminal input stream without keyboard encoding.
+pub fn rawInputCallback(self: *Surface, bytes: []const u8) !void {
+    if (bytes.len == 0) return;
+
+    crash.sentry.thread_state = self.crashThreadState();
+    defer crash.sentry.thread_state = null;
+
+    self.queueIo(try termio.Message.writeReq(self.alloc, bytes), .unlocked);
 }
 
 /// Callback for when the surface is fully visible or not, regardless

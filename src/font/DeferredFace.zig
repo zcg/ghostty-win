@@ -43,6 +43,42 @@ fn utf8ToUtf16(comptime s: []const u8) [:0]const u16 {
     return std.unicode.utf8ToUtf16LeStringLiteral(s);
 }
 
+fn directWriteFaceHasTable(face: *font.directwrite.IDWriteFontFace, tag: *const [4:0]u8) bool {
+    const tag_u32 = @as(u32, tag[0]) |
+        (@as(u32, tag[1]) << 8) |
+        (@as(u32, tag[2]) << 16) |
+        (@as(u32, tag[3]) << 24);
+
+    var table_data: ?*anyopaque = null;
+    var table_size: font.directwrite.UINT32 = 0;
+    var table_context: ?*anyopaque = null;
+    var exists: font.directwrite.BOOL = font.directwrite.FALSE;
+
+    const hr = face.tryGetFontTable(tag_u32, &table_data, &table_size, &table_context, &exists);
+    if (hr == font.directwrite.S_OK and exists == font.directwrite.TRUE) {
+        face.releaseFontTable(table_context);
+        return true;
+    }
+
+    return false;
+}
+
+fn directWriteFontHasColorTables(dw_font: *font.directwrite.IDWriteFont) bool {
+    var face: *font.directwrite.IDWriteFontFace = undefined;
+    const hr = dw_font.createFontFace(&face);
+    if (hr != font.directwrite.S_OK) {
+        log.warn("directwrite emoji presentation check: CreateFontFace failed hr=0x{X:0>8}", .{@as(u32, @bitCast(hr))});
+        return false;
+    }
+    defer _ = face.release();
+
+    return directWriteFaceHasTable(face, "COLR") or
+        directWriteFaceHasTable(face, "sbix") or
+        directWriteFaceHasTable(face, "SVG ") or
+        directWriteFaceHasTable(face, "CBDT") or
+        directWriteFaceHasTable(face, "CBLC");
+}
+
 /// Fontconfig
 fc: if (options.backend == .fontconfig_freetype) ?Fontconfig else void =
     if (options.backend == .fontconfig_freetype) null else {},
@@ -427,18 +463,23 @@ pub fn hasCodepoint(self: DeferredFace, cp: u32, p: ?Presentation) bool {
 
         .directwrite_harfbuzz => {
             if (self.dw) |dw_data| {
-                // Check presentation
-                if (p) |desired_p| {
-                    const traits = dw_data.font.isSymbolFont();
-                    const actual_p: Presentation = if (traits == 1) .emoji else .text;
-                    if (actual_p != desired_p) return false;
-                }
-
                 // Check if font has character using DirectWrite API
                 var has_char: c_int = 0;
                 const hr = dw_data.font.hasCharacter(cp, &has_char);
                 if (hr != 0) return false;
-                return has_char == 1;
+                if (has_char != 1) return false;
+
+                if (p) |desired_p| {
+                    const has_color = directWriteFontHasColorTables(dw_data.font);
+                    const actual_p: Presentation = if (has_color) .emoji else .text;
+                    log.info(
+                        "directwrite deferred presentation cp=0x{X} desired={} actual={} color_tables={} symbol_font={}",
+                        .{ cp, desired_p, actual_p, has_color, dw_data.font.isSymbolFont() },
+                    );
+                    if (actual_p != desired_p) return false;
+                }
+
+                return true;
             }
         },
 

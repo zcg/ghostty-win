@@ -139,6 +139,15 @@ layout_w: i32 = 0,
 /// Pending high surrogate for UTF-16 surrogate pair input (emoji, etc.)
 pending_high_surrogate: ?u16 = null,
 
+/// Pending key metadata for ConPTY Win32 input mode. Win32 delivers text
+/// through WM_CHAR after WM_KEYDOWN, so the text message borrows the key
+/// metadata recorded from the preceding key-down message.
+pending_win32_input_key: bool = false,
+pending_win32_input_vk: u16 = 0,
+pending_win32_input_scan: u16 = 0,
+pending_win32_input_control_state: u32 = 0,
+pending_win32_input_repeat_count: u16 = 1,
+
 const App = @import("App.zig");
 const Window = @import("Window.zig");
 const ProgressState = terminal.osc.Command.ProgressReport.State;
