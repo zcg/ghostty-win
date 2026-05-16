@@ -730,10 +730,11 @@ const cell_bg_ps =
     \\        (grid_size_packed_2u16 >> 16u) & 0xFFFFu
     \\    );
     \\
-    \\    // Compute grid position from pixel position.
+    \\    // Compute grid position from pixel position. grid_padding is stored as
+    \\    // top, right, bottom, left, so x subtracts left and y subtracts top.
     \\    // In D3D11, SV_Position has origin at top-left, y increases downward.
-    \\    int grid_x = int(floor((pos.x - grid_padding.x) / cell_size.x));
-    \\    int grid_y = int(floor((pos.y - grid_padding.y) / cell_size.y));
+    \\    int grid_x = int(floor((pos.x - grid_padding.w) / cell_size.x));
+    \\    int grid_y = int(floor((pos.y - grid_padding.x) / cell_size.y));
     \\
     \\    // Handle padding extend
     \\    if (grid_x < 0) {
