@@ -75,6 +75,7 @@ pub const WM_CLOSE = 0x0010;
 pub const WM_COPYDATA = 0x004A;
 pub const WM_DESTROY = 0x0002;
 pub const WM_PAINT = 0x000F;
+pub const WM_ERASEBKGND = 0x0014;
 pub const WM_SIZE = 0x0005;
 pub const WM_KEYDOWN = 0x0100;
 pub const WM_CHAR = 0x0102;
@@ -101,6 +102,8 @@ pub const SW_RESTORE: c_int = 9;
 pub const GWL_STYLE: c_int = -16;
 pub const GWL_EXSTYLE: c_int = -20;
 pub const GWLP_USERDATA: c_int = -21;
+pub const WS_EX_LAYERED: u32 = 0x00080000;
+pub const LWA_ALPHA: DWORD = 0x00000002;
 
 pub const IDC_ARROW: ?[*:0]align(1) const u16 = @ptrFromInt(32512);
 
@@ -133,6 +136,7 @@ pub extern "user32" fn SetWindowPos(hWnd: HWND, hWndInsertAfter: ?HWND, x: i32, 
 pub extern "user32" fn IsZoomed(hWnd: HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn GetWindowLongW(hWnd: HWND, nIndex: c_int) callconv(.winapi) i32;
 pub extern "user32" fn SetWindowLongW(hWnd: HWND, nIndex: c_int, dwNewLong: i32) callconv(.winapi) i32;
+pub extern "user32" fn SetLayeredWindowAttributes(hWnd: HWND, crKey: DWORD, bAlpha: u8, dwFlags: DWORD) callconv(.winapi) BOOL;
 pub extern "user32" fn GetWindowRect(hWnd: HWND, lpRect: *RECT) callconv(.winapi) BOOL;
 pub extern "user32" fn MonitorFromWindow(hWnd: HWND, dwFlags: DWORD) callconv(.winapi) ?*anyopaque;
 pub extern "user32" fn GetMonitorInfoW(hMonitor: ?*anyopaque, lpmi: *MONITORINFO) callconv(.winapi) BOOL;
@@ -148,3 +152,96 @@ pub extern "user32" fn FindWindowW(lpClassName: ?[*:0]const u16, lpWindowName: ?
 pub const ERROR_ALREADY_EXISTS: DWORD = 183;
 /// Custom app message used for single-instance "open new window" notification.
 pub const WM_APP_NEW_WINDOW: UINT = 0x8000 + 1; // WM_APP + 1
+
+// Desktop Window Manager attributes. Windows 10 accepts dark-mode titlebar
+// updates through DWMWA_USE_IMMERSIVE_DARK_MODE; Windows 11 adds system
+// backdrop materials through DWMWA_SYSTEMBACKDROP_TYPE.
+pub const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
+pub const DWMWA_BORDER_COLOR: DWORD = 34;
+pub const DWMWA_CAPTION_COLOR: DWORD = 35;
+pub const DWMWA_TEXT_COLOR: DWORD = 36;
+pub const DWMWA_SYSTEMBACKDROP_TYPE: DWORD = 38;
+pub const DWMWA_COLOR_NONE: DWORD = 0xFFFFFFFE;
+
+pub const DWM_SYSTEMBACKDROP_TYPE = enum(DWORD) {
+    auto = 0,
+    none = 1,
+    main_window = 2,
+    transient_window = 3,
+    tabbed_window = 4,
+};
+
+pub extern "dwmapi" fn DwmSetWindowAttribute(
+    hwnd: HWND,
+    dwAttribute: DWORD,
+    pvAttribute: *const anyopaque,
+    cbAttribute: DWORD,
+) callconv(.winapi) i32;
+
+pub const ACCENT_STATE = enum(i32) {
+    disabled = 0,
+    enable_gradient = 1,
+    enable_transparent_gradient = 2,
+    enable_blurbehind = 3,
+    enable_acrylicblurbehind = 4,
+    enable_hostbackdrop = 5,
+};
+
+pub fn accentStateForBlur(blur: anytype) ACCENT_STATE {
+    return switch (blur) {
+        .acrylic => .enable_acrylicblurbehind,
+        .mica, .@"mica-alt" => .enable_hostbackdrop,
+        .true => .enable_blurbehind,
+        else => .disabled,
+    };
+}
+
+pub const ACCENT_POLICY = extern struct {
+    AccentState: ACCENT_STATE,
+    AccentFlags: DWORD,
+    GradientColor: DWORD,
+    AnimationId: DWORD,
+};
+
+pub const AccentTint = struct {
+    r: u8,
+    g: u8,
+    b: u8,
+};
+
+pub const WINDOWCOMPOSITIONATTRIBDATA = extern struct {
+    Attrib: DWORD,
+    pvData: *anyopaque,
+    cbData: usize,
+};
+
+pub const WCA_ACCENT_POLICY: DWORD = 19;
+
+pub extern "user32" fn SetWindowCompositionAttribute(
+    hwnd: HWND,
+    data: *WINDOWCOMPOSITIONATTRIBDATA,
+) callconv(.winapi) BOOL;
+
+pub fn setAccentPolicy(hwnd: HWND, state: ACCENT_STATE, opacity: f64, tint: ?AccentTint) void {
+    var accent: ACCENT_POLICY = .{
+        .AccentState = state,
+        .AccentFlags = 2,
+        .GradientColor = acrylicGradientColor(opacity, tint),
+        .AnimationId = 0,
+    };
+    var data: WINDOWCOMPOSITIONATTRIBDATA = .{
+        .Attrib = WCA_ACCENT_POLICY,
+        .pvData = &accent,
+        .cbData = @sizeOf(ACCENT_POLICY),
+    };
+    _ = SetWindowCompositionAttribute(hwnd, &data);
+}
+
+pub fn acrylicGradientColor(opacity: f64, tint: ?AccentTint) u32 {
+    const alpha: u32 = @intFromFloat(@round(@max(0.0, @min(1.0, opacity)) * 255.0));
+    const color = tint orelse AccentTint{ .r = 0, .g = 0, .b = 0 };
+    return (alpha << 24) |
+        (@as(u32, color.b) << 16) |
+        (@as(u32, color.g) << 8) |
+        @as(u32, color.r);
+}

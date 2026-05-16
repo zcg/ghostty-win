@@ -1033,8 +1033,16 @@ palette: Palette = .{},
 ///   * `macos-glass-regular` - Standard glass effect with some opacity
 ///   * `macos-glass-clear` - Highly transparent glass effect
 ///
+/// On Windows, there are additional special values that can be set to use
+/// native Desktop Window Manager backdrop materials:
+///
+///   * `acrylic` - Acrylic backdrop
+///   * `mica` - Mica backdrop
+///   * `mica-alt` - Mica Alt backdrop
+///
 /// If the macOS values are set, then this implies `background-blur = true`
-/// on non-macOS platforms.
+/// on non-macOS platforms. Windows values imply `background-blur = true`
+/// only on Windows.
 ///
 /// Supported on macOS and on some Linux desktop environments, including:
 ///
@@ -9624,6 +9632,9 @@ pub const BackgroundBlur = union(enum) {
     true,
     @"macos-glass-regular",
     @"macos-glass-clear",
+    acrylic,
+    mica,
+    @"mica-alt",
     radius: u8,
 
     pub fn parseCLI(self: *BackgroundBlur, input: ?[]const u8) !void {
@@ -9674,6 +9685,7 @@ pub const BackgroundBlur = union(enum) {
             // This has the effect of making the standard blur happen on
             // Linux.
             .@"macos-glass-regular", .@"macos-glass-clear" => true,
+            .acrylic, .mica, .@"mica-alt" => true,
         };
     }
 
@@ -9687,6 +9699,9 @@ pub const BackgroundBlur = union(enum) {
             // tagged union if we ever need to.
             .@"macos-glass-regular" => -1,
             .@"macos-glass-clear" => -2,
+            .acrylic => -3,
+            .mica => -4,
+            .@"mica-alt" => -5,
         };
     }
 
@@ -9700,6 +9715,9 @@ pub const BackgroundBlur = union(enum) {
             .radius => |v| try formatter.formatEntry(u8, v),
             .@"macos-glass-regular" => try formatter.formatEntry([]const u8, "macos-glass-regular"),
             .@"macos-glass-clear" => try formatter.formatEntry([]const u8, "macos-glass-clear"),
+            .acrylic => try formatter.formatEntry([]const u8, "acrylic"),
+            .mica => try formatter.formatEntry([]const u8, "mica"),
+            .@"mica-alt" => try formatter.formatEntry([]const u8, "mica-alt"),
         }
     }
 
@@ -9724,6 +9742,15 @@ pub const BackgroundBlur = union(enum) {
 
         try v.parseCLI("macos-glass-clear");
         try testing.expectEqual(.@"macos-glass-clear", v);
+
+        try v.parseCLI("acrylic");
+        try testing.expectEqual(.acrylic, v);
+
+        try v.parseCLI("mica");
+        try testing.expectEqual(.mica, v);
+
+        try v.parseCLI("mica-alt");
+        try testing.expectEqual(.@"mica-alt", v);
 
         try testing.expectError(error.InvalidValue, v.parseCLI(""));
         try testing.expectError(error.InvalidValue, v.parseCLI("aaaa"));

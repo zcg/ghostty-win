@@ -6,9 +6,9 @@ const configpkg = @import("../config.zig");
 const terminal = @import("../terminal/main.zig");
 const SharedGrid = @import("main.zig").SharedGrid;
 pub const noop = @import("shaper/noop.zig");
-pub const harfbuzz = @import("shaper/harfbuzz.zig");
-pub const coretext = @import("shaper/coretext.zig");
-pub const web_canvas = @import("shaper/web_canvas.zig");
+pub const harfbuzz = if (options.backend.hasHarfbuzz()) @import("shaper/harfbuzz.zig") else void;
+pub const coretext = if (options.backend == .coretext) @import("shaper/coretext.zig") else void;
+pub const web_canvas = if (options.backend == .web_canvas) @import("shaper/web_canvas.zig") else void;
 pub const Cache = @import("shaper/Cache.zig");
 pub const TextRun = run.TextRun;
 pub const RunIterator = run.RunIterator;
@@ -29,7 +29,9 @@ pub const Shaper = switch (options.backend) {
     // font faces.
     .coretext => coretext.Shaper,
 
-    .coretext_noshape => noop.Shaper,
+    .coretext_noshape,
+    .directwrite,
+    => noop.Shaper,
 
     .web_canvas => web_canvas.Shaper,
 };

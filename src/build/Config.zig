@@ -164,6 +164,15 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
         "The app runtime to use. Not all values supported on all platforms.",
     ) orelse RendererBackend.default(target.result, wasm_target);
 
+    if (target.result.os.tag == .windows) {
+        if (config.font_backend != .directwrite) {
+            @panic("Windows builds require -Dfont-backend=directwrite; FreeType is disabled on Windows.");
+        }
+        if (config.renderer != .direct2d) {
+            @panic("Windows builds require -Drenderer=direct2d; OpenGL is disabled on Windows.");
+        }
+    }
+
     //---------------------------------------------------------------
     // Feature Flags
 

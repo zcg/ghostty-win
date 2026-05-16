@@ -1,10 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const assert = @import("../quirks.zig").inlineAssert;
-const fontconfig = @import("fontconfig");
-const macos = @import("macos");
 const opentype = @import("opentype.zig");
 const options = @import("main.zig").options;
+const fontconfig = if (options.backend.hasFontconfig()) @import("fontconfig") else void;
+const macos = if (options.backend.hasCoretext()) @import("macos") else void;
 const Collection = @import("main.zig").Collection;
 const DeferredFace = @import("main.zig").DeferredFace;
 const Variation = @import("main.zig").face.Variation;
@@ -16,6 +16,7 @@ pub const Discover = switch (options.backend) {
     .freetype => void, // no discovery
     .fontconfig_freetype => Fontconfig,
     .web_canvas => void, // no discovery
+    .directwrite => void,
     .coretext,
     .coretext_freetype,
     .coretext_harfbuzz,

@@ -8,10 +8,10 @@ const DeferredFace = @This();
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const fontconfig = @import("fontconfig");
-const macos = @import("macos");
 const font = @import("main.zig");
 const options = @import("main.zig").options;
+const fontconfig = if (options.backend.hasFontconfig()) @import("fontconfig") else void;
+const macos = if (options.backend.hasCoretext()) @import("macos") else void;
 const Library = @import("main.zig").Library;
 const Face = @import("main.zig").Face;
 const Presentation = @import("main.zig").Presentation;
@@ -23,8 +23,8 @@ fc: if (options.backend == .fontconfig_freetype) ?Fontconfig else void =
     if (options.backend == .fontconfig_freetype) null else {},
 
 /// CoreText
-ct: if (font.Discover == font.discovery.CoreText) ?CoreText else void =
-    if (font.Discover == font.discovery.CoreText) null else {},
+ct: if (options.backend.hasCoretext()) ?CoreText else void =
+    if (options.backend.hasCoretext()) null else {},
 
 /// Canvas
 wc: if (options.backend == .web_canvas) ?WebCanvas else void =
@@ -87,7 +87,9 @@ pub const WebCanvas = struct {
 pub fn deinit(self: *DeferredFace) void {
     switch (options.backend) {
         .fontconfig_freetype => if (self.fc) |*fc| fc.deinit(),
-        .freetype => {},
+        .freetype,
+        .directwrite,
+        => {},
         .web_canvas => if (self.wc) |*wc| wc.deinit(),
         .coretext,
         .coretext_freetype,
@@ -101,7 +103,9 @@ pub fn deinit(self: *DeferredFace) void {
 /// Returns the family name of the font.
 pub fn familyName(self: DeferredFace, buf: []u8) ![]const u8 {
     switch (options.backend) {
-        .freetype => {},
+        .freetype,
+        .directwrite,
+        => {},
 
         .fontconfig_freetype => if (self.fc) |fc|
             return (try fc.pattern.get(.family, 0)).string,
@@ -129,7 +133,9 @@ pub fn familyName(self: DeferredFace, buf: []u8) ![]const u8 {
 /// face so it doesn't have to be freed.
 pub fn name(self: DeferredFace, buf: []u8) ![]const u8 {
     switch (options.backend) {
-        .freetype => {},
+        .freetype,
+        .directwrite,
+        => {},
 
         .fontconfig_freetype => if (self.fc) |fc|
             return (try fc.pattern.get(.fullname, 0)).string,
@@ -170,7 +176,9 @@ pub fn load(
 
         // Unreachable because we must be already loaded or have the
         // proper configuration for one of the other deferred mechanisms.
-        .freetype => unreachable,
+        .freetype,
+        .directwrite,
+        => unreachable,
     };
 }
 
@@ -344,7 +352,9 @@ pub fn hasCodepoint(self: DeferredFace, cp: u32, p: ?Presentation) bool {
             return face.glyphIndex(cp) != null;
         },
 
-        .freetype => {},
+        .freetype,
+        .directwrite,
+        => {},
     }
 
     // This is unreachable because discovery mechanisms terminate, and

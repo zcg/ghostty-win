@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const build_config = @import("build_config.zig");
 
 /// See build_config.ExeEntrypoint for why we do this.
@@ -14,6 +15,28 @@ const entrypoint = switch (build_config.exe_entrypoint) {
 
 /// The main entrypoint for the program.
 pub const main = entrypoint.main;
+
+const windows = struct {
+    fn WinMain(
+        hInstance: std.os.windows.HINSTANCE,
+        hPrevInstance: ?std.os.windows.HINSTANCE,
+        lpCmdLine: std.os.windows.LPSTR,
+        nCmdShow: std.os.windows.INT,
+    ) callconv(.winapi) std.os.windows.INT {
+        _ = hInstance;
+        _ = hPrevInstance;
+        _ = lpCmdLine;
+        _ = nCmdShow;
+        main() catch return 1;
+        return 0;
+    }
+};
+
+comptime {
+    if (builtin.os.tag == .windows) {
+        @export(&windows.WinMain, .{ .name = "WinMain" });
+    }
+}
 
 /// Standard options such as logger overrides.
 pub const std_options: std.Options = if (@hasDecl(entrypoint, "std_options"))

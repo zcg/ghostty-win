@@ -5,6 +5,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const Action = @import("ghostty.zig").Action;
 const args = @import("args.zig");
 const font = @import("../font/main.zig");
+const d2d = if (builtin.os.tag == .windows) @import("../apprt/win32/d2d.zig") else void;
 
 const log = std.log.scoped(.list_fonts);
 
@@ -78,7 +79,8 @@ fn runArgs(alloc_gpa: Allocator, argsIter: anytype) !u8 {
 
     // Its possible to build Ghostty without font discovery!
     if (comptime font.Discover == void) {
-        // On Windows, scan the system font directory directly using FreeType.
+        // On Windows, query DirectWrite directly. Native Windows builds do
+        // not include FreeType or fontconfig.
         if (comptime builtin.os.tag == .windows) {
             return try listWindowsFonts(alloc_gpa, alloc, config);
         }
@@ -170,7 +172,8 @@ fn runArgs(alloc_gpa: Allocator, argsIter: anytype) !u8 {
     return 0;
 }
 
-/// List fonts on Windows by scanning font directories directly with FreeType.
+/// List fonts on Windows through DirectWrite so this command follows the
+/// native Windows font backend.
 fn listWindowsFonts(alloc_gpa: Allocator, alloc: Allocator, config: Options) !u8 {
     _ = alloc_gpa;
 
@@ -178,22 +181,65 @@ fn listWindowsFonts(alloc_gpa: Allocator, alloc: Allocator, config: Options) !u8
     var stdout_writer = std.fs.File.stdout().writer(&buffer);
     const stdout = &stdout_writer.interface;
 
-    var lib = try font.Library.init(alloc);
-    defer lib.deinit();
-
     var families: std.ArrayList([]const u8) = .empty;
     var map: std.StringHashMap(std.ArrayListUnmanaged([]const u8)) = .init(alloc);
 
-    // Scan system fonts directory
-    try scanWindowsFontDir(alloc, &lib, "C:\\Windows\\Fonts", config, &families, &map);
+    var factory_unknown: *d2d.IUnknown = undefined;
+    if (d2d.failed(d2d.DWriteCreateFactory(
+        .SHARED,
+        &d2d.IID_IDWriteFactory,
+        &factory_unknown,
+    ))) return error.DirectWriteUnavailable;
+    const factory: *d2d.IDWriteFactory = @ptrCast(@alignCast(factory_unknown));
+    defer releaseCom(factory);
 
-    // Scan user-installed fonts directory (%LOCALAPPDATA%\Microsoft\Windows\Fonts)
-    if (std.process.getEnvVarOwned(alloc, "LOCALAPPDATA")) |local_appdata| {
-        defer alloc.free(local_appdata);
-        const user_path = try std.fmt.allocPrintSentinel(alloc, "{s}\\Microsoft\\Windows\\Fonts", .{local_appdata}, 0);
-        defer alloc.free(user_path);
-        try scanWindowsFontDir(alloc, &lib, user_path, config, &families, &map);
-    } else |_| {}
+    var collection: *d2d.IDWriteFontCollection = undefined;
+    if (d2d.failed(factory.GetSystemFontCollection(&collection, 0))) {
+        return error.DirectWriteUnavailable;
+    }
+    defer releaseCom(collection);
+
+    const family_count = collection.GetFontFamilyCount();
+    for (0..family_count) |family_index_usize| {
+        const family_index: u32 = @intCast(family_index_usize);
+        var family_ptr: *d2d.IDWriteFontFamily = undefined;
+        if (d2d.failed(collection.GetFontFamily(family_index, &family_ptr))) continue;
+        defer releaseCom(family_ptr);
+
+        var family_names: *d2d.IDWriteLocalizedStrings = undefined;
+        if (d2d.failed(family_ptr.GetFamilyNames(&family_names))) continue;
+        defer releaseCom(family_names);
+
+        const family = localizedStringUtf8(alloc, family_names) catch continue;
+        if (config.family) |filter| {
+            if (std.ascii.indexOfIgnoreCase(family, filter) == null) continue;
+        }
+
+        const gop = try map.getOrPut(family);
+        if (!gop.found_existing) {
+            try families.append(alloc, family);
+            gop.value_ptr.* = .{};
+        }
+
+        const family_list: *const d2d.IDWriteFontList = @ptrCast(@alignCast(family_ptr));
+        const font_count = family_list.GetFontCount();
+        for (0..font_count) |font_index_usize| {
+            const font_index: u32 = @intCast(font_index_usize);
+            var dwrite_font: *d2d.IDWriteFont = undefined;
+            if (d2d.failed(family_list.GetFont(font_index, &dwrite_font))) continue;
+            defer releaseCom(dwrite_font);
+
+            var face_names: *d2d.IDWriteLocalizedStrings = undefined;
+            if (d2d.failed(dwrite_font.GetFaceNames(&face_names))) continue;
+            defer releaseCom(face_names);
+
+            const face_name = localizedStringUtf8(alloc, face_names) catch continue;
+            if (!matchesWindowsFontFilters(face_name, config)) continue;
+
+            const full_name = try std.fmt.allocPrint(alloc, "{s} {s}", .{ family, face_name });
+            try gop.value_ptr.append(alloc, full_name);
+        }
+    }
 
     // Sort families
     std.mem.sortUnstable([]const u8, families.items, {}, struct {
@@ -214,69 +260,52 @@ fn listWindowsFonts(alloc_gpa: Allocator, alloc: Allocator, config: Options) !u8
     return 0;
 }
 
-fn scanWindowsFontDir(
-    alloc: Allocator,
-    lib: *font.Library,
-    dir_path: [:0]const u8,
-    config: Options,
-    families: *std.ArrayList([]const u8),
-    map: *std.StringHashMap(std.ArrayListUnmanaged([]const u8)),
-) !void {
-    var dir = std.fs.openDirAbsoluteZ(dir_path, .{ .iterate = true }) catch return;
-    defer dir.close();
-
-    var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        if (entry.kind != .file) continue;
-        const name = entry.name;
-        const is_font = std.mem.endsWith(u8, name, ".ttf") or
-            std.mem.endsWith(u8, name, ".ttc") or
-            std.mem.endsWith(u8, name, ".otf") or
-            std.mem.endsWith(u8, name, ".TTF") or
-            std.mem.endsWith(u8, name, ".TTC") or
-            std.mem.endsWith(u8, name, ".OTF");
-        if (!is_font) continue;
-
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const full_path = std.fmt.bufPrintZ(&path_buf, "{s}\\{s}", .{ dir_path, name }) catch continue;
-
-        var face_index: i32 = 0;
-        while (face_index < 16) : (face_index += 1) {
-            var face = font.Face.initFile(
-                lib.*,
-                full_path,
-                face_index,
-                .{ .size = .{ .points = 12 } },
-            ) catch break;
-            defer face.deinit();
-
-            const ft_family: ?[*:0]const u8 = face.face.handle.*.family_name;
-            if (ft_family == null) {
-                if (std.mem.endsWith(u8, name, ".ttc") or std.mem.endsWith(u8, name, ".TTC")) continue;
-                break;
-            }
-            const family_raw = std.mem.span(ft_family.?);
-
-            if (config.family) |filter| {
-                if (std.ascii.indexOfIgnoreCase(family_raw, filter) == null) {
-                    if (std.mem.endsWith(u8, name, ".ttc") or std.mem.endsWith(u8, name, ".TTC")) continue;
-                    break;
-                }
-            }
-
-            const family = try alloc.dupe(u8, family_raw);
-            const gop = try map.getOrPut(family);
-            if (!gop.found_existing) {
-                try families.append(alloc, family);
-                gop.value_ptr.* = .{};
-            }
-
-            const ft_style: ?[*:0]const u8 = face.face.handle.*.style_name;
-            const style = if (ft_style) |s| std.mem.span(s) else "Regular";
-            const full_name = try std.fmt.allocPrint(alloc, "{s} {s}", .{ family, style });
-            try gop.value_ptr.append(alloc, full_name);
-
-            if (!std.mem.endsWith(u8, name, ".ttc") and !std.mem.endsWith(u8, name, ".TTC")) break;
-        }
+fn matchesWindowsFontFilters(face_name: []const u8, config: Options) bool {
+    if (config.style) |style| {
+        if (std.ascii.indexOfIgnoreCase(face_name, style) == null) return false;
     }
+
+    if (config.bold) {
+        if (std.ascii.indexOfIgnoreCase(face_name, "bold") == null) return false;
+    }
+
+    if (config.italic) {
+        const has_italic = std.ascii.indexOfIgnoreCase(face_name, "italic") != null or
+            std.ascii.indexOfIgnoreCase(face_name, "oblique") != null;
+        if (!has_italic) return false;
+    }
+
+    return true;
+}
+
+fn localizedStringUtf8(
+    alloc: Allocator,
+    strings: *const d2d.IDWriteLocalizedStrings,
+) ![]const u8 {
+    const index = findLocalizedStringIndex(strings);
+    var len: u32 = 0;
+    if (d2d.failed(strings.GetStringLength(index, &len))) return error.DirectWriteUnavailable;
+
+    const buf = try alloc.allocSentinel(u16, len, 0);
+    if (d2d.failed(strings.GetString(index, buf.ptr, len + 1))) return error.DirectWriteUnavailable;
+    return try std.unicode.utf16LeToUtf8Alloc(alloc, buf[0..len]);
+}
+
+fn findLocalizedStringIndex(strings: *const d2d.IDWriteLocalizedStrings) u32 {
+    const count = strings.GetCount();
+    if (count == 0) return 0;
+
+    const locale = std.unicode.utf8ToUtf16LeStringLiteral("en-us");
+    var index: u32 = 0;
+    var exists: d2d.BOOL = 0;
+    if (d2d.succeeded(strings.FindLocaleName(locale, &index, &exists)) and exists != 0) {
+        return index;
+    }
+
+    return 0;
+}
+
+fn releaseCom(value: anytype) void {
+    const unknown: *d2d.IUnknown = @ptrCast(@alignCast(value));
+    _ = unknown.Release();
 }

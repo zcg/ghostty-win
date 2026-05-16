@@ -1,5 +1,5 @@
 /// Win32 surface - represents a terminal surface within a window.
-/// Manages the WGL OpenGL context and provides the interface
+/// Manages the native child window and provides the interface
 /// expected by CoreSurface.
 const Self = @This();
 
@@ -10,6 +10,8 @@ const configpkg = @import("../../config.zig");
 const CoreSurface = @import("../../Surface.zig");
 const CoreApp = @import("../../App.zig");
 const terminal = @import("../../terminal/main.zig");
+const build_config = @import("../../build_config.zig");
+const sys = @import("sys.zig");
 
 const log = std.log.scoped(.win32_surface);
 
@@ -29,43 +31,52 @@ const PAINTSTRUCT = extern struct {
     rgbReserved: [32]u8,
 };
 
-const PIXELFORMATDESCRIPTOR = extern struct {
-    nSize: u16,
-    nVersion: u16,
-    dwFlags: u32,
-    iPixelType: u8,
-    cColorBits: u8,
-    cRedBits: u8,
-    cRedShift: u8,
-    cGreenBits: u8,
-    cGreenShift: u8,
-    cBlueBits: u8,
-    cBlueShift: u8,
-    cAlphaBits: u8,
-    cAlphaShift: u8,
-    cAccumBits: u8,
-    cAccumRedBits: u8,
-    cAccumGreenBits: u8,
-    cAccumBlueBits: u8,
-    cAccumAlphaBits: u8,
-    cDepthBits: u8,
-    cStencilBits: u8,
-    cAuxBuffers: u8,
-    iLayerType: u8,
-    bReserved: u8,
-    dwLayerMask: u32,
-    dwVisibleMask: u32,
-    dwDamageMask: u32,
-};
+const OpenGL = if (build_config.renderer == .opengl) struct {
+    const PIXELFORMATDESCRIPTOR = extern struct {
+        nSize: u16,
+        nVersion: u16,
+        dwFlags: u32,
+        iPixelType: u8,
+        cColorBits: u8,
+        cRedBits: u8,
+        cRedShift: u8,
+        cGreenBits: u8,
+        cGreenShift: u8,
+        cBlueBits: u8,
+        cBlueShift: u8,
+        cAlphaBits: u8,
+        cAlphaShift: u8,
+        cAccumBits: u8,
+        cAccumRedBits: u8,
+        cAccumGreenBits: u8,
+        cAccumBlueBits: u8,
+        cAccumAlphaBits: u8,
+        cDepthBits: u8,
+        cStencilBits: u8,
+        cAuxBuffers: u8,
+        iLayerType: u8,
+        bReserved: u8,
+        dwLayerMask: u32,
+        dwVisibleMask: u32,
+        dwDamageMask: u32,
+    };
 
-// WGL / GDI constants
-const PFD_DRAW_TO_WINDOW = 0x00000004;
-const PFD_SUPPORT_OPENGL = 0x00000020;
-const PFD_DOUBLEBUFFER = 0x00000001;
-const PFD_TYPE_RGBA = 0;
-const PFD_MAIN_PLANE = 0;
+    const PFD_DRAW_TO_WINDOW = 0x00000004;
+    const PFD_SUPPORT_OPENGL = 0x00000020;
+    const PFD_DOUBLEBUFFER = 0x00000001;
+    const PFD_TYPE_RGBA = 0;
+    const PFD_MAIN_PLANE = 0;
 
-// WGL / GDI extern declarations
+    extern "gdi32" fn ChoosePixelFormat(hdc: HDC, ppfd: *const PIXELFORMATDESCRIPTOR) callconv(.winapi) c_int;
+    extern "gdi32" fn SetPixelFormat(hdc: HDC, format: c_int, ppfd: *const PIXELFORMATDESCRIPTOR) callconv(.winapi) BOOL;
+    extern "gdi32" fn SwapBuffers(hdc: HDC) callconv(.winapi) BOOL;
+    extern "opengl32" fn wglCreateContext(hdc: HDC) callconv(.winapi) HGLRC;
+    extern "opengl32" fn wglDeleteContext(hglrc: HGLRC) callconv(.winapi) BOOL;
+    extern "opengl32" fn wglMakeCurrent(hdc: HDC, hglrc: HGLRC) callconv(.winapi) BOOL;
+    extern "opengl32" fn wglGetProcAddress(lpszProc: [*:0]const u8) callconv(.winapi) ?*const anyopaque;
+    extern "opengl32" fn glViewport(x: i32, y: i32, width: i32, height: i32) callconv(.winapi) void;
+} else struct {};
+
 extern "user32" fn GetDC(hWnd: ?HWND) callconv(.winapi) HDC;
 extern "user32" fn ReleaseDC(hWnd: ?HWND, hDC: HDC) callconv(.winapi) c_int;
 extern "user32" fn InvalidateRect(hWnd: ?HWND, lpRect: ?*const std.os.windows.RECT, bErase: BOOL) callconv(.winapi) BOOL;
@@ -76,15 +87,8 @@ extern "user32" fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) callconv(.w
 extern "user32" fn SetTimer(hWnd: ?HWND, nIDEvent: usize, uElapse: UINT, lpTimerFunc: ?*const anyopaque) callconv(.winapi) usize;
 extern "user32" fn KillTimer(hWnd: ?HWND, uIDEvent: usize) callconv(.winapi) BOOL;
 extern "user32" fn FillRect(hDC: ?*anyopaque, lprc: *const RECT, hbr: ?*anyopaque) callconv(.winapi) c_int;
-extern "gdi32" fn ChoosePixelFormat(hdc: HDC, ppfd: *const PIXELFORMATDESCRIPTOR) callconv(.winapi) c_int;
-extern "gdi32" fn SetPixelFormat(hdc: HDC, format: c_int, ppfd: *const PIXELFORMATDESCRIPTOR) callconv(.winapi) BOOL;
-extern "gdi32" fn SwapBuffers(hdc: HDC) callconv(.winapi) BOOL;
 extern "gdi32" fn CreateSolidBrush(color: u32) callconv(.winapi) ?*anyopaque;
 extern "gdi32" fn DeleteObject(ho: ?*anyopaque) callconv(.winapi) BOOL;
-extern "opengl32" fn wglCreateContext(hdc: HDC) callconv(.winapi) HGLRC;
-extern "opengl32" fn wglDeleteContext(hglrc: HGLRC) callconv(.winapi) BOOL;
-extern "opengl32" fn wglMakeCurrent(hdc: HDC, hglrc: HGLRC) callconv(.winapi) BOOL;
-extern "opengl32" fn wglGetProcAddress(lpszProc: [*:0]const u8) callconv(.winapi) ?*const anyopaque;
 
 // Clipboard API
 const UINT = u32;
@@ -111,7 +115,7 @@ window: ?*Window = null,
 /// GDI device context.
 hdc: HDC = null,
 
-/// OpenGL rendering context.
+/// OpenGL rendering context, only used by legacy OpenGL builds.
 hglrc: HGLRC = null,
 
 /// The core surface, if initialized.
@@ -123,6 +127,9 @@ height: u32 = 600,
 
 /// Last known cursor position in client pixels.
 cursor_pos: apprt.CursorPos = .{ .x = 0, .y = 0 },
+
+/// Pending high surrogate from WM_CHAR.
+pending_high_surrogate: ?u16 = null,
 
 /// UTF-8 window title cache for title reporting.
 title_buf: [1024:0]u8 = [_:0]u8{0} ** 1024,
@@ -193,12 +200,29 @@ pub fn init(self: *Self, parent: HWND, app: *App) !void {
     self.hwnd = child;
     self.width = @intCast(@max(1, cw));
     self.height = @intCast(@max(1, ch));
+    self.applyBackgroundEffect();
 
     // Store self pointer on the child window for message handling
     _ = SetWindowLongPtrW(child, GWLP_USERDATA, @bitCast(@intFromPtr(self)));
     try self.createProgressOverlay();
 
-    try self.initOpenGL();
+    if (comptime build_config.renderer == .opengl) {
+        try self.initOpenGL();
+    }
+}
+
+pub fn applyBackgroundEffect(self: *Self) void {
+    const app = self.app orelse return;
+    sys.setAccentPolicy(
+        self.hwnd,
+        sys.accentStateForBlur(app.config.@"background-blur"),
+        app.config.@"background-opacity",
+        .{
+            .r = app.config.background.r,
+            .g = app.config.background.g,
+            .b = app.config.background.b,
+        },
+    );
 }
 
 var surface_class_registered: bool = false;
@@ -267,9 +291,11 @@ pub fn deinit(self: *Self) void {
         surface.deinit();
         // core_surface is allocated by CoreApp, freed there
     }
-    if (self.hglrc != null) {
-        _ = wglMakeCurrent(null, null);
-        _ = wglDeleteContext(self.hglrc);
+    if (comptime build_config.renderer == .opengl) {
+        if (self.hglrc != null) {
+            _ = OpenGL.wglMakeCurrent(null, null);
+            _ = OpenGL.wglDeleteContext(self.hglrc);
+        }
     }
     if (self.hdc != null) {
         _ = ReleaseDC(self.hwnd, self.hdc);
@@ -283,34 +309,34 @@ fn initOpenGL(self: *Self) !void {
         return error.Win32Error;
     }
 
-    var pfd: PIXELFORMATDESCRIPTOR = std.mem.zeroes(PIXELFORMATDESCRIPTOR);
-    pfd.nSize = @sizeOf(PIXELFORMATDESCRIPTOR);
+    var pfd: OpenGL.PIXELFORMATDESCRIPTOR = std.mem.zeroes(OpenGL.PIXELFORMATDESCRIPTOR);
+    pfd.nSize = @sizeOf(OpenGL.PIXELFORMATDESCRIPTOR);
     pfd.nVersion = 1;
-    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.dwFlags = OpenGL.PFD_DRAW_TO_WINDOW | OpenGL.PFD_SUPPORT_OPENGL | OpenGL.PFD_DOUBLEBUFFER;
+    pfd.iPixelType = OpenGL.PFD_TYPE_RGBA;
     pfd.cColorBits = 32;
     pfd.cDepthBits = 24;
     pfd.cStencilBits = 8;
-    pfd.iLayerType = PFD_MAIN_PLANE;
+    pfd.iLayerType = OpenGL.PFD_MAIN_PLANE;
 
-    const pixel_format = ChoosePixelFormat(self.hdc, &pfd);
+    const pixel_format = OpenGL.ChoosePixelFormat(self.hdc, &pfd);
     if (pixel_format == 0) {
         log.err("ChoosePixelFormat failed", .{});
         return error.Win32Error;
     }
 
-    if (SetPixelFormat(self.hdc, pixel_format, &pfd) == 0) {
+    if (OpenGL.SetPixelFormat(self.hdc, pixel_format, &pfd) == 0) {
         log.err("SetPixelFormat failed", .{});
         return error.Win32Error;
     }
 
-    self.hglrc = wglCreateContext(self.hdc);
+    self.hglrc = OpenGL.wglCreateContext(self.hdc);
     if (self.hglrc == null) {
         log.err("wglCreateContext failed", .{});
         return error.Win32Error;
     }
 
-    if (wglMakeCurrent(self.hdc, self.hglrc) == 0) {
+    if (OpenGL.wglMakeCurrent(self.hdc, self.hglrc) == 0) {
         log.err("wglMakeCurrent failed", .{});
         return error.Win32Error;
     }
@@ -321,7 +347,7 @@ fn initOpenGL(self: *Self) !void {
         self.width = @intCast(client_rect.right - client_rect.left);
         self.height = @intCast(client_rect.bottom - client_rect.top);
     }
-    glViewport(0, 0, @intCast(self.width), @intCast(self.height));
+    OpenGL.glViewport(0, 0, @intCast(self.width), @intCast(self.height));
 
     log.info("WGL OpenGL context created, client area {}x{}", .{ self.width, self.height });
 }
@@ -352,8 +378,9 @@ const WNDCLASSEXW = extern struct {
 };
 
 pub fn swapBuffers(self: *Self) void {
+    if (comptime build_config.renderer != .opengl) return;
     if (self.hdc != null) {
-        _ = SwapBuffers(self.hdc);
+        _ = OpenGL.SwapBuffers(self.hdc);
     }
 }
 
@@ -394,7 +421,8 @@ fn registerProgressClass() !void {
 
 /// Disable VSync via WGL extension for lower input latency.
 pub fn disableVSync(_: *Self) void {
-    const func: ?*const fn (i32) callconv(.winapi) i32 = @ptrCast(wglGetProcAddress("wglSwapIntervalEXT"));
+    if (comptime build_config.renderer != .opengl) return;
+    const func: ?*const fn (i32) callconv(.winapi) i32 = @ptrCast(OpenGL.wglGetProcAddress("wglSwapIntervalEXT"));
     if (func) |setInterval| {
         _ = setInterval(0);
     }
@@ -433,27 +461,29 @@ extern "user32" fn ShowCursor(bShow: i32) callconv(.winapi) i32;
 /// Update the OpenGL viewport to match the current window size.
 /// Called from the renderer thread before each frame.
 pub fn updateViewport(self: *Self) void {
-    glViewport(0, 0, @intCast(self.width), @intCast(self.height));
+    if (comptime build_config.renderer != .opengl) return;
+    OpenGL.glViewport(0, 0, @intCast(self.width), @intCast(self.height));
 }
-
-extern "opengl32" fn glViewport(x: i32, y: i32, width: i32, height: i32) callconv(.winapi) void;
 
 /// Make the WGL context current on the calling thread.
 pub fn makeContextCurrent(self: *Self) void {
+    if (comptime build_config.renderer != .opengl) return;
     if (self.hdc != null and self.hglrc != null) {
-        _ = wglMakeCurrent(self.hdc, self.hglrc);
+        _ = OpenGL.wglMakeCurrent(self.hdc, self.hglrc);
     }
 }
 
 /// Release the WGL context from the calling thread.
 pub fn releaseContext() void {
-    _ = wglMakeCurrent(null, null);
+    if (comptime build_config.renderer != .opengl) return;
+    _ = OpenGL.wglMakeCurrent(null, null);
 }
 
 /// Release context from the main thread before handing off to renderer thread.
 pub fn releaseMainThreadContext(self: *Self) void {
     _ = self;
-    _ = wglMakeCurrent(null, null);
+    if (comptime build_config.renderer != .opengl) return;
+    _ = OpenGL.wglMakeCurrent(null, null);
 }
 
 pub fn setLayoutRect(self: *Self, x: i32, y: i32, w: i32, h: i32) void {

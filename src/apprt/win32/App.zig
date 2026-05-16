@@ -1,5 +1,5 @@
 /// Win32 application runtime for Ghostty. This is a minimal native Windows
-/// application using the Win32 API with OpenGL rendering.
+/// application using the Win32 API with the configured native renderer.
 ///
 /// An App owns a list of Windows, each with its own HWND and split tree.
 const App = @This();
@@ -37,8 +37,12 @@ const PAINTSTRUCT = sys.PAINTSTRUCT;
 const WM_CLOSE = sys.WM_CLOSE;
 const WM_SIZE = sys.WM_SIZE;
 const WM_PAINT = sys.WM_PAINT;
+const WM_ERASEBKGND = sys.WM_ERASEBKGND;
+const WM_DRAWITEM: UINT = 0x002B;
 const WM_KEYDOWN = sys.WM_KEYDOWN;
 const WM_CHAR = sys.WM_CHAR;
+const WM_UNICHAR: UINT = 0x0109;
+const UNICODE_NOCHAR: WPARAM = 0xFFFF;
 const WM_COPYDATA = sys.WM_COPYDATA;
 const WM_WAKEUP = sys.WM_WAKEUP;
 const COPYDATASTRUCT = sys.COPYDATASTRUCT;
@@ -583,6 +587,7 @@ pub fn performAction(
                 log.err("failed to update config: {}", .{err});
                 return false;
             };
+            self.applyWindowEffects();
             return true;
         },
         .config_change => return true,
@@ -1101,10 +1106,32 @@ fn getModifiers() @import("../../input.zig").Mods {
 }
 
 fn handleTextInput(surface: *Surface, msg: UINT, wparam: WPARAM) LRESULT {
-    _ = msg;
     if (surface.core_surface) |core| {
         const mods = getModifiers();
-        const codepoint: u21 = @intCast(wparam);
+        const codepoint: u21 = codepoint: {
+            if (msg == WM_UNICHAR) {
+                if (wparam == UNICODE_NOCHAR) return 1;
+                surface.pending_high_surrogate = null;
+                if (wparam > 0x10FFFF) return 0;
+                break :codepoint @intCast(wparam);
+            }
+
+            const unit: u16 = @truncate(wparam);
+            if (std.unicode.utf16IsHighSurrogate(unit)) {
+                surface.pending_high_surrogate = unit;
+                return 0;
+            }
+
+            if (std.unicode.utf16IsLowSurrogate(unit)) {
+                const high = surface.pending_high_surrogate orelse return 0;
+                surface.pending_high_surrogate = null;
+                const pair = [_]u16{ high, unit };
+                break :codepoint std.unicode.utf16DecodeSurrogatePair(&pair) catch return 0;
+            }
+
+            surface.pending_high_surrogate = null;
+            break :codepoint @intCast(unit);
+        };
         if (codepoint < 0x20 or codepoint == 0x7f) return 0;
         var utf8_buf: [4]u8 = undefined;
         const len = std.unicode.utf8Encode(codepoint, &utf8_buf) catch 0;
@@ -1172,16 +1199,42 @@ fn shouldDispatchKeyPress(vk: WPARAM, mods: @import("../../input.zig").Mods) boo
 
 fn mapVirtualKey(vk: WPARAM) @import("../../input.zig").Key {
     return switch (vk) {
-        0x41 => .key_a, 0x42 => .key_b, 0x43 => .key_c, 0x44 => .key_d,
-        0x45 => .key_e, 0x46 => .key_f, 0x47 => .key_g, 0x48 => .key_h,
-        0x49 => .key_i, 0x4A => .key_j, 0x4B => .key_k, 0x4C => .key_l,
-        0x4D => .key_m, 0x4E => .key_n, 0x4F => .key_o, 0x50 => .key_p,
-        0x51 => .key_q, 0x52 => .key_r, 0x53 => .key_s, 0x54 => .key_t,
-        0x55 => .key_u, 0x56 => .key_v, 0x57 => .key_w, 0x58 => .key_x,
-        0x59 => .key_y, 0x5A => .key_z,
-        0x30 => .digit_0, 0x31 => .digit_1, 0x32 => .digit_2, 0x33 => .digit_3,
-        0x34 => .digit_4, 0x35 => .digit_5, 0x36 => .digit_6, 0x37 => .digit_7,
-        0x38 => .digit_8, 0x39 => .digit_9,
+        0x41 => .key_a,
+        0x42 => .key_b,
+        0x43 => .key_c,
+        0x44 => .key_d,
+        0x45 => .key_e,
+        0x46 => .key_f,
+        0x47 => .key_g,
+        0x48 => .key_h,
+        0x49 => .key_i,
+        0x4A => .key_j,
+        0x4B => .key_k,
+        0x4C => .key_l,
+        0x4D => .key_m,
+        0x4E => .key_n,
+        0x4F => .key_o,
+        0x50 => .key_p,
+        0x51 => .key_q,
+        0x52 => .key_r,
+        0x53 => .key_s,
+        0x54 => .key_t,
+        0x55 => .key_u,
+        0x56 => .key_v,
+        0x57 => .key_w,
+        0x58 => .key_x,
+        0x59 => .key_y,
+        0x5A => .key_z,
+        0x30 => .digit_0,
+        0x31 => .digit_1,
+        0x32 => .digit_2,
+        0x33 => .digit_3,
+        0x34 => .digit_4,
+        0x35 => .digit_5,
+        0x36 => .digit_6,
+        0x37 => .digit_7,
+        0x38 => .digit_8,
+        0x39 => .digit_9,
         0x08 => .backspace,
         0x09 => .tab,
         0x0D => .enter,
@@ -1210,9 +1263,18 @@ fn mapVirtualKey(vk: WPARAM) @import("../../input.zig").Key {
         0xBC => .comma,
         0xBE => .period,
         0xBF => .slash,
-        0x70 => .f1, 0x71 => .f2, 0x72 => .f3, 0x73 => .f4,
-        0x74 => .f5, 0x75 => .f6, 0x76 => .f7, 0x77 => .f8,
-        0x78 => .f9, 0x79 => .f10, 0x7A => .f11, 0x7B => .f12,
+        0x70 => .f1,
+        0x71 => .f2,
+        0x72 => .f3,
+        0x73 => .f4,
+        0x74 => .f5,
+        0x75 => .f6,
+        0x76 => .f7,
+        0x77 => .f8,
+        0x78 => .f9,
+        0x79 => .f10,
+        0x7A => .f11,
+        0x7B => .f12,
         else => .unidentified,
     };
 }
@@ -1282,8 +1344,13 @@ pub fn wndProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.
             }
             return 0;
         },
+        WM_DRAWITEM => {
+            if (getWindow(hwnd)) |window| return window.handleDrawItem(lparam);
+            return 0;
+        },
         0x001A => { // WM_SETTINGCHANGE
             if (getWindow(hwnd)) |window| {
+                window.applyWindowEffects();
                 if (window.focused_surface) |s| {
                     if (s.core_surface) |core| {
                         core.colorSchemeCallback(window.app.detectColorScheme()) catch {};
@@ -1324,12 +1391,17 @@ pub fn wndProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.
     }
 }
 
+fn applyWindowEffects(self: *App) void {
+    for (self.windows.items) |window| window.applyWindowEffects();
+}
+
 // ============================================================================
 // Surface child window message dispatch
 // ============================================================================
 
 pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) LRESULT {
     switch (msg) {
+        WM_ERASEBKGND => return 1,
         WM_PAINT => {
             var ps: PAINTSTRUCT = std.mem.zeroes(PAINTSTRUCT);
             _ = sys.BeginPaint(hwnd, &ps);
@@ -1353,7 +1425,7 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
             }
             return 0;
         },
-        WM_CHAR, 0x0106 => return handleTextInput(surface, msg, wparam),
+        WM_CHAR, 0x0106, WM_UNICHAR => return handleTextInput(surface, msg, wparam),
         WM_KEYDOWN, 0x0104 => {
             if (surface.core_surface) |core| {
                 const mods = getModifiers();

@@ -6,6 +6,7 @@ pub const Backend = enum {
     opengl,
     metal,
     webgl,
+    direct2d,
 
     pub fn default(
         target: std.Target,
@@ -18,6 +19,7 @@ pub const Backend = enum {
         }
 
         if (target.os.tag.isDarwin()) return .metal;
+        if (target.os.tag == .windows) return .direct2d;
         return .opengl;
     }
 };

@@ -469,6 +469,9 @@ fn findWindowsFont(
 ) ?Face {
     _ = desc;
     if (comptime builtin.os.tag != .windows) return null;
+    if (comptime font.options.backend == .directwrite) {
+        return Face.initNamed(family, load_options.size);
+    }
 
     // System fonts directory
     if (self.findInDir("C:\\Windows\\Fonts", family, load_options)) |face| return face;

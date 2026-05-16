@@ -83,3 +83,11 @@ test "unicode props: tables match uucode" {
         }
     }
 }
+
+test "unicode props: standalone double-width characters" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u2, 2), props.get(0x4E00).width);
+    try testing.expectEqual(@as(u2, 2), props.get(0x54C8).width);
+    try testing.expectEqual(@as(u2, 2), props.get(0x1F600).width);
+}

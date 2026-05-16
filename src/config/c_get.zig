@@ -221,6 +221,24 @@ test "c_get: background-blur" {
         try testing.expect(get(&c, .@"background-blur", @ptrCast(&cval)));
         try testing.expectEqual(-2, cval);
     }
+    {
+        c.@"background-blur" = .acrylic;
+        var cval: i16 = undefined;
+        try testing.expect(get(&c, .@"background-blur", @ptrCast(&cval)));
+        try testing.expectEqual(-3, cval);
+    }
+    {
+        c.@"background-blur" = .mica;
+        var cval: i16 = undefined;
+        try testing.expect(get(&c, .@"background-blur", @ptrCast(&cval)));
+        try testing.expectEqual(-4, cval);
+    }
+    {
+        c.@"background-blur" = .@"mica-alt";
+        var cval: i16 = undefined;
+        try testing.expect(get(&c, .@"background-blur", @ptrCast(&cval)));
+        try testing.expectEqual(-5, cval);
+    }
 }
 
 test "c_get: split-preserve-zoom" {

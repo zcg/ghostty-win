@@ -21,13 +21,16 @@ const DWORD = sys.DWORD;
 const LPARAM = sys.LPARAM;
 const WPARAM = sys.WPARAM;
 const LRESULT = sys.LRESULT;
+const HDC = ?*anyopaque;
 
 const WS_CHILD: u32 = 0x40000000;
 const WS_VISIBLE: u32 = 0x10000000;
 const WS_TABSTOP: u32 = 0x00010000;
 const TCS_FIXEDWIDTH: u32 = 0x0400;
+const TCS_OWNERDRAWFIXED: u32 = 0x2000;
 const WM_NOTIFY: UINT = 0x004E;
 const WM_SETFONT: UINT = 0x0030;
+const WM_DRAWITEM: UINT = 0x002B;
 const WM_PAINT: UINT = 0x000F;
 const WM_LBUTTONDOWN: UINT = 0x0201;
 const WM_LBUTTONUP: UINT = 0x0202;
@@ -58,6 +61,26 @@ const NMHDR = extern struct {
     code: i32,
 };
 
+const DRAWITEMSTRUCT = extern struct {
+    CtlType: UINT,
+    CtlID: UINT,
+    itemID: UINT,
+    itemAction: UINT,
+    itemState: UINT,
+    hwndItem: HWND,
+    hDC: HDC,
+    rcItem: RECT,
+    itemData: usize,
+};
+
+const ODT_TAB: UINT = 101;
+const ODS_SELECTED: UINT = 0x0001;
+const TRANSPARENT: c_int = 1;
+const DT_CENTER: UINT = 0x00000001;
+const DT_VCENTER: UINT = 0x00000004;
+const DT_SINGLELINE: UINT = 0x00000020;
+const DT_END_ELLIPSIS: UINT = 0x00008000;
+
 const INITCOMMONCONTROLSEX = extern struct {
     dwSize: DWORD,
     dwICC: DWORD,
@@ -78,6 +101,9 @@ extern "gdi32" fn CreateFontW(cHeight: c_int, cWidth: c_int, cEscapement: c_int,
 extern "gdi32" fn CreateSolidBrush(color: u32) callconv(.winapi) ?*anyopaque;
 extern "gdi32" fn DeleteObject(ho: ?*anyopaque) callconv(.winapi) BOOL;
 extern "user32" fn FillRect(hDC: ?*anyopaque, lprc: *const RECT, hbr: ?*anyopaque) callconv(.winapi) c_int;
+extern "gdi32" fn SetBkMode(hdc: HDC, mode: c_int) callconv(.winapi) c_int;
+extern "gdi32" fn SetTextColor(hdc: HDC, color: u32) callconv(.winapi) u32;
+extern "user32" fn DrawTextW(hdc: HDC, lpchText: [*:0]const u16, cchText: c_int, lprc: *RECT, format: UINT) callconv(.winapi) c_int;
 extern "user32" fn SetCapture(hWnd: HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
 extern "user32" fn SetCursor(hCursor: sys.HCURSOR) callconv(.winapi) sys.HCURSOR;
@@ -160,6 +186,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     errdefer {
         if (self.hwnd) |h| _ = sys.DestroyWindow(h);
     }
+    self.applyWindowEffects();
 
     try self.createTabControl();
     _ = sys.SetWindowLongPtrW(self.hwnd.?, sys.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
@@ -239,6 +266,146 @@ fn createHwnd(self: *Window, title_override: ?[:0]const u8) !void {
     _ = sys.UpdateWindow(self.hwnd.?);
 }
 
+pub fn applyWindowEffects(self: *Window) void {
+    const hwnd = self.hwnd orelse return;
+
+    const dark_mode: u32 = switch (self.app.config.@"window-theme") {
+        .dark => 1,
+        .light => 0,
+        .auto, .system, .ghostty => switch (self.app.detectColorScheme()) {
+            .dark => 1,
+            .light => 0,
+        },
+    };
+    _ = sys.DwmSetWindowAttribute(
+        hwnd,
+        sys.DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &dark_mode,
+        @sizeOf(@TypeOf(dark_mode)),
+    );
+
+    const backdrop: sys.DWM_SYSTEMBACKDROP_TYPE = switch (self.app.config.@"background-blur") {
+        .acrylic => .transient_window,
+        .mica => .main_window,
+        .@"mica-alt" => .tabbed_window,
+        else => .none,
+    };
+    _ = sys.DwmSetWindowAttribute(
+        hwnd,
+        sys.DWMWA_SYSTEMBACKDROP_TYPE,
+        &backdrop,
+        @sizeOf(@TypeOf(backdrop)),
+    );
+
+    const caption_color: u32 = switch (self.app.config.@"background-blur") {
+        .false => bgrColor(self.app.config.background),
+        else => sys.DWMWA_COLOR_NONE,
+    };
+    _ = sys.DwmSetWindowAttribute(
+        hwnd,
+        sys.DWMWA_CAPTION_COLOR,
+        &caption_color,
+        @sizeOf(@TypeOf(caption_color)),
+    );
+    _ = sys.DwmSetWindowAttribute(
+        hwnd,
+        sys.DWMWA_BORDER_COLOR,
+        &caption_color,
+        @sizeOf(@TypeOf(caption_color)),
+    );
+
+    const text_color: u32 = bgrColor(self.app.config.foreground);
+    _ = sys.DwmSetWindowAttribute(
+        hwnd,
+        sys.DWMWA_TEXT_COLOR,
+        &text_color,
+        @sizeOf(@TypeOf(text_color)),
+    );
+
+    sys.setAccentPolicy(
+        hwnd,
+        sys.accentStateForBlur(self.app.config.@"background-blur"),
+        self.app.config.@"background-opacity",
+        .{
+            .r = self.app.config.background.r,
+            .g = self.app.config.background.g,
+            .b = self.app.config.background.b,
+        },
+    );
+    self.applySurfaceWindowEffects();
+}
+
+fn applySurfaceWindowEffects(self: *Window) void {
+    for (self.tabs.items) |*tab| {
+        var leaves: [64]*Surface = undefined;
+        for (tabLeaves(tab, &leaves)) |surface| surface.applyBackgroundEffect();
+    }
+}
+
+fn bgrColor(color: configpkg.Config.Color) u32 {
+    return (@as(u32, color.b) << 16) |
+        (@as(u32, color.g) << 8) |
+        @as(u32, color.r);
+}
+
+fn hasWindowBackdrop(self: *const Window) bool {
+    return switch (self.app.config.@"background-blur") {
+        .false => false,
+        else => true,
+    };
+}
+
+pub fn handleDrawItem(self: *Window, lparam: LPARAM) LRESULT {
+    const dis: *DRAWITEMSTRUCT = @ptrFromInt(@as(usize, @bitCast(lparam)));
+    if (dis.CtlType != ODT_TAB) return 0;
+    if (self.tab_hwnd == null or dis.hwndItem != self.tab_hwnd.?) return 0;
+    if (dis.itemID >= self.tabs.items.len) return 0;
+
+    var rect = dis.rcItem;
+    const selected = (dis.itemState & ODS_SELECTED) != 0;
+    if (!self.hasWindowBackdrop() or selected) {
+        const bg = if (selected)
+            blendColor(self.app.config.background, self.app.config.foreground, 0.18)
+        else
+            self.app.config.background;
+        const brush = CreateSolidBrush(bgrColor(bg));
+        if (brush) |b| {
+            _ = FillRect(dis.hDC, &rect, b);
+            _ = DeleteObject(b);
+        }
+    }
+
+    rect.left += 8;
+    rect.right -= 8;
+    _ = SetBkMode(dis.hDC, TRANSPARENT);
+    _ = SetTextColor(dis.hDC, bgrColor(self.app.config.foreground));
+    const title = self.tabs.items[dis.itemID].title;
+    const utf16 = std.unicode.utf8ToUtf16LeAllocZ(self.app.alloc, title) catch return 1;
+    defer self.app.alloc.free(utf16);
+    _ = DrawTextW(
+        dis.hDC,
+        utf16.ptr,
+        @intCast(utf16.len),
+        &rect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+    );
+    return 1;
+}
+
+fn blendColor(a: configpkg.Config.Color, b: configpkg.Config.Color, amount: f32) configpkg.Config.Color {
+    return .{
+        .r = blendChannel(a.r, b.r, amount),
+        .g = blendChannel(a.g, b.g, amount),
+        .b = blendChannel(a.b, b.b, amount),
+    };
+}
+
+fn blendChannel(a: u8, b: u8, amount: f32) u8 {
+    const af: f32 = @floatFromInt(a);
+    const bf: f32 = @floatFromInt(b);
+    return @intFromFloat(@round(af + (bf - af) * amount));
+}
+
 fn createTabControl(self: *Window) !void {
     const icc: INITCOMMONCONTROLSEX = .{
         .dwSize = @sizeOf(INITCOMMONCONTROLSEX),
@@ -249,7 +416,7 @@ fn createTabControl(self: *Window) !void {
         0,
         std.unicode.utf8ToUtf16LeStringLiteral("SysTabControl32"),
         std.unicode.utf8ToUtf16LeStringLiteral(""),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TCS_FIXEDWIDTH,
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TCS_FIXEDWIDTH | TCS_OWNERDRAWFIXED,
         0,
         0,
         0,

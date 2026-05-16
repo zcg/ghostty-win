@@ -3,7 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const options = @import("main.zig").options;
-const freetype = @import("freetype");
+const freetype = if (options.backend.hasFreetype()) @import("freetype") else void;
 const font = @import("main.zig");
 
 /// Library implementation for the compile options.
@@ -19,6 +19,7 @@ pub const Library = switch (options.backend) {
     .coretext_harfbuzz,
     .coretext_noshape,
     .web_canvas,
+    .directwrite,
     => NoopLibrary,
 };
 

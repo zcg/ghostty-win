@@ -27,6 +27,9 @@ pub const Backend = enum {
     /// supports).
     web_canvas,
 
+    /// DirectWrite for Windows-native font discovery, shaping, and drawing.
+    directwrite,
+
     /// Returns the default backend for a build environment. This is
     /// meant to be called at comptime by the build.zig script. To get the
     /// backend look at build_options.
@@ -41,11 +44,7 @@ pub const Backend = enum {
         }
 
         if (target.os.tag == .windows) {
-            // Avoid fontconfig on Windows because its libxml2 dependency
-            // may not unpack due to symlinks. Use plain freetype for now
-            // which means no font discovery. Full solution would likely use
-            // DirectWrite which has its own discovery API.
-            return .freetype;
+            return .directwrite;
         }
 
         // macOS also supports "coretext_freetype" but there is no scenario
@@ -68,6 +67,7 @@ pub const Backend = enum {
             .coretext_harfbuzz,
             .coretext_noshape,
             .web_canvas,
+            .directwrite,
             => false,
         };
     }
@@ -83,6 +83,7 @@ pub const Backend = enum {
             .freetype,
             .fontconfig_freetype,
             .web_canvas,
+            .directwrite,
             => false,
         };
     }
@@ -97,6 +98,7 @@ pub const Backend = enum {
             .coretext_harfbuzz,
             .coretext_noshape,
             .web_canvas,
+            .directwrite,
             => false,
         };
     }
@@ -112,6 +114,7 @@ pub const Backend = enum {
             .coretext,
             .coretext_noshape,
             .web_canvas,
+            .directwrite,
             => false,
         };
     }

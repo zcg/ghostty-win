@@ -21,14 +21,14 @@ uucode_tables: std.Build.LazyPath,
 
 /// Used to keep track of a list of file sources.
 pub const LazyPathList = std.ArrayList(std.Build.LazyPath);
+const uucode_pkg_path = "zig-pkg/uucode-0.2.0-ZZjBPqZVVABQepOqZHR7vV_NcaN-wats0IB6o-Exj6m9";
 
 pub fn init(b: *std.Build, cfg: *const Config) !SharedDeps {
     const uucode_tables = blk: {
-        const uucode = b.dependency("uucode", .{
-            .build_config_path = b.path("src/build/uucode_config.zig"),
-        });
-
-        break :blk uucode.namedLazyPath("tables.zig");
+        break :blk buildUucodeTables(
+            b,
+            b.path("src/build/uucode_config.zig"),
+        );
     };
 
     var result: SharedDeps = .{
@@ -45,6 +45,73 @@ pub fn init(b: *std.Build, cfg: *const Config) !SharedDeps {
     try result.initTarget(b, cfg.target);
     if (cfg.emit_unicode_table_gen) result.unicode_tables.install(b);
     return result;
+}
+
+fn buildUucodeTables(
+    b: *std.Build,
+    build_config_path: std.Build.LazyPath,
+) std.Build.LazyPath {
+    const target = b.graph.host;
+    const optimize: std.builtin.OptimizeMode = .Debug;
+
+    const config_mod = b.createModule(.{
+        .root_source_file = b.path(uucode_pkg_path ++ "/src/config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const types_mod = b.createModule(.{
+        .root_source_file = b.path(uucode_pkg_path ++ "/src/types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    types_mod.addImport("config.zig", config_mod);
+    config_mod.addImport("types.zig", types_mod);
+
+    const config_x_mod = b.createModule(.{
+        .root_source_file = b.path(uucode_pkg_path ++ "/src/x/config.x.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const types_x_mod = b.createModule(.{
+        .root_source_file = b.path(uucode_pkg_path ++ "/src/x/types.x.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    types_x_mod.addImport("config.x.zig", config_x_mod);
+    config_x_mod.addImport("types.x.zig", types_x_mod);
+    config_x_mod.addImport("types.zig", types_mod);
+    config_x_mod.addImport("config.zig", config_mod);
+
+    const build_config_mod = b.createModule(.{
+        .root_source_file = build_config_path,
+        .target = target,
+        .optimize = optimize,
+    });
+    build_config_mod.addImport("types.zig", types_mod);
+    build_config_mod.addImport("config.zig", config_mod);
+    build_config_mod.addImport("types.x.zig", types_x_mod);
+    build_config_mod.addImport("config.x.zig", config_x_mod);
+
+    const build_tables_mod = b.createModule(.{
+        .root_source_file = b.path(uucode_pkg_path ++ "/src/build/tables.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    build_tables_mod.addImport("config.zig", config_mod);
+    build_tables_mod.addImport("build_config", build_config_mod);
+    build_tables_mod.addImport("types.zig", types_mod);
+
+    const build_tables_exe = b.addExecutable(.{
+        .name = "ghostty_uucode_build_tables",
+        .root_module = build_tables_mod,
+        .use_llvm = true,
+    });
+
+    const run_build_tables_exe = b.addRunArtifact(build_tables_exe);
+    run_build_tables_exe.setCwd(b.path(uucode_pkg_path));
+    return run_build_tables_exe.addOutputFileArg("tables.zig");
 }
 
 /// Retarget our dependencies for another build target. Modifies in-place.
@@ -180,28 +247,29 @@ pub fn add(
         else => {},
     }
 
-    // Freetype. We always include this even if our font backend doesn't
-    // use it because Dear Imgui uses Freetype.
+    // Freetype.
     _ = b.systemIntegrationOption("freetype", .{}); // Shows it in help
-    if (b.lazyDependency("freetype", .{
-        .target = target,
-        .optimize = optimize,
-        .@"enable-libpng" = true,
-    })) |freetype_dep| {
-        step.root_module.addImport(
-            "freetype",
-            freetype_dep.module("freetype"),
-        );
-
-        if (b.systemIntegrationOption("freetype", .{})) {
-            step.linkSystemLibrary2("bzip2", dynamic_link_opts);
-            step.linkSystemLibrary2("freetype2", dynamic_link_opts);
-        } else {
-            step.linkLibrary(freetype_dep.artifact("freetype"));
-            try static_libs.append(
-                b.allocator,
-                freetype_dep.artifact("freetype").getEmittedBin(),
+    if (self.config.font_backend.hasFreetype()) {
+        if (b.lazyDependency("freetype", .{
+            .target = target,
+            .optimize = optimize,
+            .@"enable-libpng" = true,
+        })) |freetype_dep| {
+            step.root_module.addImport(
+                "freetype",
+                freetype_dep.module("freetype"),
             );
+
+            if (b.systemIntegrationOption("freetype", .{})) {
+                step.linkSystemLibrary2("bzip2", dynamic_link_opts);
+                step.linkSystemLibrary2("freetype2", dynamic_link_opts);
+            } else {
+                step.linkLibrary(freetype_dep.artifact("freetype"));
+                try static_libs.append(
+                    b.allocator,
+                    freetype_dep.artifact("freetype").getEmittedBin(),
+                );
+            }
         }
     }
 
@@ -440,8 +508,10 @@ pub fn add(
     }
 
     // Other dependencies, mostly pure Zig
-    if (b.lazyDependency("opengl", .{})) |dep| {
-        step.root_module.addImport("opengl", dep.module("opengl"));
+    if (self.config.renderer == .opengl) {
+        if (b.lazyDependency("opengl", .{})) |dep| {
+            step.root_module.addImport("opengl", dep.module("opengl"));
+        }
     }
     if (b.lazyDependency("vaxis", .{})) |dep| {
         step.root_module.addImport("vaxis", dep.module("vaxis"));
@@ -526,12 +596,13 @@ pub fn add(
     if (b.lazyDependency("dcimgui", .{
         .target = target,
         .optimize = optimize,
-        .freetype = true,
+        .freetype = target.result.os.tag != .windows,
         .@"backend-metal" = target.result.os.tag.isDarwin(),
         .@"backend-osx" = target.result.os.tag == .macos,
         // OpenGL3 backend should only be built on non-Apple targets.
         // Apple platforms use Metal (and macOS may also use the OSX backend).
-        .@"backend-opengl3" = !target.result.os.tag.isDarwin(),
+        .@"backend-opengl3" = !target.result.os.tag.isDarwin() and
+            self.config.renderer == .opengl,
     })) |dep| {
         step.root_module.addImport("dcimgui", dep.module("dcimgui"));
         step.linkLibrary(dep.artifact("dcimgui"));
@@ -582,12 +653,14 @@ pub fn add(
 
     // If we're building an exe then we have additional dependencies.
     if (step.kind != .lib) {
-        // We always statically compile glad
-        step.addIncludePath(b.path("vendor/glad/include/"));
-        step.addCSourceFile(.{
-            .file = b.path("vendor/glad/src/gl.c"),
-            .flags = &.{},
-        });
+        if (self.config.renderer == .opengl) {
+            // We always statically compile glad for OpenGL.
+            step.addIncludePath(b.path("vendor/glad/include/"));
+            step.addCSourceFile(.{
+                .file = b.path("vendor/glad/src/gl.c"),
+                .flags = &.{},
+            });
+        }
 
         // When we're targeting flatpak we ALWAYS link GTK so we
         // get access to glib for dbus.
@@ -599,9 +672,16 @@ pub fn add(
             .win32 => {
                 step.linkSystemLibrary2("user32", .{});
                 step.linkSystemLibrary2("gdi32", .{});
-                step.linkSystemLibrary2("opengl32", .{});
+                if (self.config.renderer == .opengl) {
+                    step.linkSystemLibrary2("opengl32", .{});
+                }
+                if (self.config.renderer == .direct2d) {
+                    step.linkSystemLibrary2("d2d1", .{});
+                    step.linkSystemLibrary2("dwrite", .{});
+                }
                 step.linkSystemLibrary2("imm32", .{});
                 step.linkSystemLibrary2("shell32", .{});
+                step.linkSystemLibrary2("dwmapi", .{});
             },
         }
     }

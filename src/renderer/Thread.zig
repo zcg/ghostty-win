@@ -10,6 +10,7 @@ const internal_os = @import("../os/main.zig");
 const rendererpkg = @import("../renderer.zig");
 const apprt = @import("../apprt.zig");
 const configpkg = @import("../config.zig");
+const build_config = @import("../build_config.zig");
 const BlockingQueue = @import("../datastruct/main.zig").BlockingQueue;
 const App = @import("../App.zig");
 
@@ -512,7 +513,9 @@ fn drawFrame(self: *Thread, now: bool) void {
     } else {
         // On Win32, update the GL viewport before drawing since there's
         // no toolkit managing it for us.
-        if (comptime @hasDecl(apprt.runtime.Surface, "updateViewport")) {
+        if (comptime build_config.renderer == .opengl and
+            @hasDecl(apprt.runtime.Surface, "updateViewport"))
+        {
             self.surface.updateViewport();
         }
 
@@ -521,7 +524,9 @@ fn drawFrame(self: *Thread, now: bool) void {
 
         // On Win32, we need to explicitly swap buffers after rendering
         // since there's no toolkit managing the GL context for us.
-        if (comptime @hasDecl(apprt.runtime.Surface, "swapBuffers")) {
+        if (comptime build_config.renderer == .opengl and
+            @hasDecl(apprt.runtime.Surface, "swapBuffers"))
+        {
             self.surface.swapBuffers();
         }
     }

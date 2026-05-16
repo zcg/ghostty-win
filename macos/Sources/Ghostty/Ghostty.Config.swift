@@ -751,7 +751,7 @@ extension Ghostty.Config {
 
     /// Background blur configuration that maps from the C API values.
     /// Positive values represent blur radius, special negative values
-    /// represent macOS-specific glass effects.
+    /// represent platform-specific backdrop effects.
     enum BackgroundBlur: Equatable {
         case disabled
         case radius(Int)
@@ -774,6 +774,8 @@ extension Ghostty.Config {
                 } else {
                     self = .disabled
                 }
+            case -3, -4, -5:
+                self = .disabled
             default:
                 self = .radius(Int(value))
             }

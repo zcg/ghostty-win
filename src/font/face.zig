@@ -4,8 +4,9 @@ const build_config = @import("../build_config.zig");
 const options = @import("main.zig").options;
 const Metrics = @import("main.zig").Metrics;
 const config = @import("../config.zig");
-const freetype = @import("face/freetype.zig");
-const coretext = @import("face/coretext.zig");
+const freetype = if (options.backend.hasFreetype()) @import("face/freetype.zig") else void;
+const coretext = if (options.backend.hasCoretext()) @import("face/coretext.zig") else void;
+const directwrite = if (options.backend == .directwrite) @import("face/directwrite.zig") else void;
 pub const web_canvas = @import("face/web_canvas.zig");
 
 /// Face implementation for the compile options.
@@ -21,6 +22,8 @@ pub const Face = switch (options.backend) {
     => coretext.Face,
 
     .web_canvas => web_canvas.Face,
+
+    .directwrite => directwrite.Face,
 };
 
 /// If a DPI can't be calculated, this DPI is used. This is probably

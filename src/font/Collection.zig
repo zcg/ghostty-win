@@ -1444,7 +1444,9 @@ test "face metrics" {
             .coretext_harfbuzz,
             .coretext_noshape,
             => 7.3828125,
-            .web_canvas => unreachable,
+            .web_canvas,
+            .directwrite,
+            => unreachable,
         },
         .ascent = 12.3046875,
         .descent = -3.6953125,
@@ -1464,7 +1466,9 @@ test "face metrics" {
             .coretext_harfbuzz,
             .coretext_noshape,
             => 16.0,
-            .web_canvas => unreachable,
+            .web_canvas,
+            .directwrite,
+            => unreachable,
         },
     };
     const wideMetricsExpected = font.Metrics.FaceMetrics{
@@ -1478,7 +1482,9 @@ test "face metrics" {
             .coretext_harfbuzz,
             .coretext_noshape,
             => 9.6,
-            .web_canvas => unreachable,
+            .web_canvas,
+            .directwrite,
+            => unreachable,
         },
         .ascent = 14.72,
         .descent = -3.52,
@@ -1498,7 +1504,9 @@ test "face metrics" {
             .coretext_harfbuzz,
             .coretext_noshape,
             => 15.472000000000001,
-            .web_canvas => unreachable,
+            .web_canvas,
+            .directwrite,
+            => unreachable,
         },
     };
 
