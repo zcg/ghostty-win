@@ -284,6 +284,7 @@ fn progressWndProc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) callconv(
 pub fn deinit(self: *Self) void {
     self.hideProgressOverlay();
     if (self.progress_hwnd) |hwnd| {
+        _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         _ = DestroyWindow(hwnd);
         self.progress_hwnd = null;
     }
@@ -299,7 +300,10 @@ pub fn deinit(self: *Self) void {
     }
     if (self.hdc != null) {
         _ = ReleaseDC(self.hwnd, self.hdc);
+        self.hdc = null;
     }
+    _ = SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+    _ = DestroyWindow(self.hwnd);
 }
 
 fn initOpenGL(self: *Self) !void {

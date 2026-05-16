@@ -70,6 +70,13 @@ pub const COPYDATASTRUCT = extern struct {
     lpData: ?*const anyopaque,
 };
 
+pub const TRACKMOUSEEVENT = extern struct {
+    cbSize: DWORD,
+    dwFlags: DWORD,
+    hwndTrack: HWND,
+    dwHoverTime: DWORD,
+};
+
 // Window messages
 pub const WM_CLOSE = 0x0010;
 pub const WM_COPYDATA = 0x004A;
@@ -77,10 +84,19 @@ pub const WM_DESTROY = 0x0002;
 pub const WM_PAINT = 0x000F;
 pub const WM_ERASEBKGND = 0x0014;
 pub const WM_SIZE = 0x0005;
+pub const WM_NCCALCSIZE = 0x0083;
+pub const WM_NCHITTEST = 0x0084;
+pub const WM_NCLBUTTONDOWN = 0x00A1;
+pub const WM_NCLBUTTONUP = 0x00A2;
+pub const WM_NCMOUSEMOVE = 0x00A0;
+pub const WM_NCMOUSELEAVE = 0x02A2;
+pub const WM_MOUSELEAVE = 0x02A3;
+pub const WM_SYSCOMMAND = 0x0112;
 pub const WM_KEYDOWN = 0x0100;
 pub const WM_CHAR = 0x0102;
 pub const WM_USER = 0x0400;
 pub const WM_WAKEUP = WM_USER + 1;
+pub const WM_APP = 0x8000;
 
 // Window class styles
 pub const CS_HREDRAW = 0x0002;
@@ -88,15 +104,45 @@ pub const CS_VREDRAW = 0x0001;
 pub const CS_OWNDC = 0x0020;
 
 // Window styles
+pub const WS_OVERLAPPED: u32 = 0x00000000;
+pub const WS_THICKFRAME: u32 = 0x00040000;
+pub const WS_MINIMIZEBOX: u32 = 0x00020000;
+pub const WS_MAXIMIZEBOX: u32 = 0x00010000;
 pub const WS_OVERLAPPEDWINDOW = 0x00CF0000;
 pub const WS_CAPTION_BIT: u32 = 0x00C00000;
 pub const WS_EX_TOPMOST: i32 = 0x00000008;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 
+// Hit-test values returned from WM_NCHITTEST.
+pub const HTCLIENT: LRESULT = 1;
+pub const HTCAPTION: LRESULT = 2;
+pub const HTMINBUTTON: LRESULT = 8;
+pub const HTMAXBUTTON: LRESULT = 9;
+pub const HTLEFT: LRESULT = 10;
+pub const HTRIGHT: LRESULT = 11;
+pub const HTTOP: LRESULT = 12;
+pub const HTTOPLEFT: LRESULT = 13;
+pub const HTTOPRIGHT: LRESULT = 14;
+pub const HTBOTTOM: LRESULT = 15;
+pub const HTBOTTOMLEFT: LRESULT = 16;
+pub const HTBOTTOMRIGHT: LRESULT = 17;
+
+// GetSystemMetrics indices.
+pub const SM_CXFRAME: c_int = 32;
+pub const SM_CYFRAME: c_int = 33;
+pub const SM_CXPADDEDBORDER: c_int = 92;
+
 // ShowWindow commands
 pub const SW_SHOWNORMAL = 1;
+pub const SW_MINIMIZE: c_int = 6;
 pub const SW_MAXIMIZE: c_int = 3;
 pub const SW_RESTORE: c_int = 9;
+
+// WM_SYSCOMMAND values.
+pub const SC_MINIMIZE: WPARAM = 0xF020;
+pub const SC_MAXIMIZE: WPARAM = 0xF030;
+pub const SC_CLOSE: WPARAM = 0xF060;
+pub const SC_RESTORE: WPARAM = 0xF120;
 
 // GetWindowLong indices
 pub const GWL_STYLE: c_int = -16;
@@ -104,6 +150,8 @@ pub const GWL_EXSTYLE: c_int = -20;
 pub const GWLP_USERDATA: c_int = -21;
 pub const WS_EX_LAYERED: u32 = 0x00080000;
 pub const LWA_ALPHA: DWORD = 0x00000002;
+pub const TME_LEAVE: DWORD = 0x00000002;
+pub const TME_NONCLIENT: DWORD = 0x00000010;
 
 pub const IDC_ARROW: ?[*:0]align(1) const u16 = @ptrFromInt(32512);
 
@@ -128,6 +176,7 @@ pub extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: c_int, dwNewLong: L
 pub extern "user32" fn GetWindowLongPtrW(hWnd: HWND, nIndex: c_int) callconv(.winapi) LONG_PTR;
 pub extern "user32" fn GetClientRect(hWnd: HWND, lpRect: *RECT) callconv(.winapi) BOOL;
 pub extern "user32" fn InvalidateRect(hWnd: ?HWND, lpRect: ?*const RECT, bErase: BOOL) callconv(.winapi) BOOL;
+pub extern "user32" fn TrackMouseEvent(lpEventTrack: *TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callconv(.winapi) ?HINSTANCE;
 pub extern "user32" fn GetKeyState(nVirtKey: c_int) callconv(.winapi) i16;
 pub extern "user32" fn SetWindowTextW(hWnd: HWND, lpString: [*:0]const u16) callconv(.winapi) BOOL;
@@ -138,6 +187,7 @@ pub extern "user32" fn GetWindowLongW(hWnd: HWND, nIndex: c_int) callconv(.winap
 pub extern "user32" fn SetWindowLongW(hWnd: HWND, nIndex: c_int, dwNewLong: i32) callconv(.winapi) i32;
 pub extern "user32" fn SetLayeredWindowAttributes(hWnd: HWND, crKey: DWORD, bAlpha: u8, dwFlags: DWORD) callconv(.winapi) BOOL;
 pub extern "user32" fn GetWindowRect(hWnd: HWND, lpRect: *RECT) callconv(.winapi) BOOL;
+pub extern "user32" fn GetSystemMetrics(nIndex: c_int) callconv(.winapi) c_int;
 pub extern "user32" fn MonitorFromWindow(hWnd: HWND, dwFlags: DWORD) callconv(.winapi) ?*anyopaque;
 pub extern "user32" fn GetMonitorInfoW(hMonitor: ?*anyopaque, lpmi: *MONITORINFO) callconv(.winapi) BOOL;
 pub extern "user32" fn SetFocus(hWnd: HWND) callconv(.winapi) ?HWND;
@@ -148,10 +198,25 @@ pub extern "kernel32" fn ReleaseMutex(hMutex: ?*anyopaque) callconv(.winapi) BOO
 pub extern "kernel32" fn CloseHandle(hObject: ?*anyopaque) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GetLastError() callconv(.winapi) DWORD;
 pub extern "user32" fn FindWindowW(lpClassName: ?[*:0]const u16, lpWindowName: ?[*:0]const u16) callconv(.winapi) ?HWND;
+pub extern "user32" fn CreatePopupMenu() callconv(.winapi) HMENU;
+pub extern "user32" fn AppendMenuW(hMenu: HMENU, uFlags: UINT, uIDNewItem: usize, lpNewItem: ?[*:0]const u16) callconv(.winapi) BOOL;
+pub extern "user32" fn TrackPopupMenu(hMenu: HMENU, uFlags: UINT, x: i32, y: i32, nReserved: c_int, hWnd: HWND, prcRect: ?*const RECT) callconv(.winapi) UINT;
+pub extern "user32" fn DestroyMenu(hMenu: HMENU) callconv(.winapi) BOOL;
+pub extern "user32" fn ClientToScreen(hWnd: HWND, lpPoint: *POINT) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetFileAttributesW(lpFileName: [*:0]const u16) callconv(.winapi) DWORD;
 
 pub const ERROR_ALREADY_EXISTS: DWORD = 183;
+pub const INVALID_FILE_ATTRIBUTES: DWORD = 0xFFFFFFFF;
+pub const MF_STRING: UINT = 0x00000000;
+pub const MF_SEPARATOR: UINT = 0x00000800;
+pub const TPM_RETURNCMD: UINT = 0x0100;
+pub const TPM_LEFTALIGN: UINT = 0x0000;
+pub const TPM_TOPALIGN: UINT = 0x0000;
 /// Custom app message used for single-instance "open new window" notification.
-pub const WM_APP_NEW_WINDOW: UINT = 0x8000 + 1; // WM_APP + 1
+pub const WM_APP_NEW_WINDOW: UINT = WM_APP + 1;
+pub const WM_APP_CLOSE_TAB: UINT = WM_APP + 20;
+pub const WM_APP_NEW_TAB: UINT = WM_APP + 21;
+pub const WM_APP_NEW_PROFILE_TAB: UINT = WM_APP + 22;
 
 // Desktop Window Manager attributes. Windows 10 accepts dark-mode titlebar
 // updates through DWMWA_USE_IMMERSIVE_DARK_MODE; Windows 11 adds system
@@ -160,8 +225,17 @@ pub const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
 pub const DWMWA_BORDER_COLOR: DWORD = 34;
 pub const DWMWA_CAPTION_COLOR: DWORD = 35;
 pub const DWMWA_TEXT_COLOR: DWORD = 36;
+pub const DWMWA_WINDOW_CORNER_PREFERENCE: DWORD = 33;
 pub const DWMWA_SYSTEMBACKDROP_TYPE: DWORD = 38;
 pub const DWMWA_COLOR_NONE: DWORD = 0xFFFFFFFE;
+pub const DWMWA_COLOR_DEFAULT: DWORD = 0xFFFFFFFF;
+
+pub const DWM_WINDOW_CORNER_PREFERENCE = enum(DWORD) {
+    default = 0,
+    do_not_round = 1,
+    round = 2,
+    round_small = 3,
+};
 
 pub const DWM_SYSTEMBACKDROP_TYPE = enum(DWORD) {
     auto = 0,

@@ -9,6 +9,7 @@ const configpkg = @import("../../config.zig");
 const CoreSurface = @import("../../Surface.zig");
 const Surface = @import("Surface.zig");
 const SplitTree = @import("SplitTree.zig");
+const d2d = @import("d2d.zig");
 const sys = @import("sys.zig");
 
 const App = @import("App.zig");
@@ -25,91 +26,550 @@ const HDC = ?*anyopaque;
 
 const WS_CHILD: u32 = 0x40000000;
 const WS_VISIBLE: u32 = 0x10000000;
-const WS_TABSTOP: u32 = 0x00010000;
-const TCS_FIXEDWIDTH: u32 = 0x0400;
-const TCS_OWNERDRAWFIXED: u32 = 0x2000;
-const WM_NOTIFY: UINT = 0x004E;
-const WM_SETFONT: UINT = 0x0030;
-const WM_DRAWITEM: UINT = 0x002B;
 const WM_PAINT: UINT = 0x000F;
 const WM_LBUTTONDOWN: UINT = 0x0201;
 const WM_LBUTTONUP: UINT = 0x0202;
 const WM_MOUSEMOVE: UINT = 0x0200;
 const WM_CAPTURECHANGED: UINT = 0x0215;
 const WM_SETCURSOR: UINT = 0x0020;
+const WM_NCHITTEST: UINT = 0x0084;
 const SW_HIDE: c_int = 0;
-const TCM_FIRST: UINT = 0x1300;
-const TCM_GETCURSEL: UINT = TCM_FIRST + 11;
-const TCM_SETCURSEL: UINT = TCM_FIRST + 12;
-const TCM_DELETEITEM: UINT = TCM_FIRST + 8;
-const TCM_DELETEALLITEMS: UINT = TCM_FIRST + 9;
-const TCM_INSERTITEMW: UINT = TCM_FIRST + 62;
-const TCM_SETITEMW: UINT = TCM_FIRST + 61;
-const TCM_SETITEMSIZE: UINT = TCM_FIRST + 41;
-const TCIF_TEXT: UINT = 0x0001;
-const TCN_FIRST: i32 = -550;
-const TCN_SELCHANGE: i32 = TCN_FIRST - 1;
-const ICC_TAB_CLASSES: DWORD = 0x00000008;
-const TAB_HEIGHT: i32 = 30;
+const TOP_BAR_HEIGHT: i32 = 46;
 const DIVIDER_THICKNESS: i32 = 10;
+const TOPLEVEL_STYLE: DWORD = sys.WS_OVERLAPPED | sys.WS_THICKFRAME | sys.WS_MINIMIZEBOX | sys.WS_MAXIMIZEBOX;
+const CUSTOM_TAB_WIDTH: i32 = 360;
+const NEW_TAB_WIDTH: i32 = 44;
+const DROPDOWN_WIDTH: i32 = 38;
+const WINDOW_BUTTON_WIDTH: i32 = 46;
+const WINDOW_BUTTON_COUNT: i32 = 3;
+const TAB_START_X: i32 = 10;
+const TAB_TOP: i32 = 8;
+const TAB_BOTTOM: i32 = 45;
+const TAB_GAP: i32 = 1;
+const TAB_CLOSE_WIDTH: i32 = 34;
+const TAB_ACTION_TOP: i32 = 7;
+const TITLE_ICON_SIZE: f32 = 12.0;
+const TITLE_BUTTON_HIT_HEIGHT: i32 = TOP_BAR_HEIGHT;
+const TITLE_HOVER_ALPHA: f32 = 0.24;
+const TITLE_PRESSED_ALPHA: f32 = 0.34;
+const CLOSE_HOVER: configpkg.Config.Color = .{ .r = 232, .g = 17, .b = 35 };
+const CLOSE_PRESSED: configpkg.Config.Color = .{ .r = 184, .g = 14, .b = 28 };
 const IDC_SIZEWE = @as(?[*:0]align(1) const u16, @ptrFromInt(32644));
 const IDC_SIZENS = @as(?[*:0]align(1) const u16, @ptrFromInt(32645));
 
-const NMHDR = extern struct {
-    hwndFrom: HWND,
-    idFrom: usize,
-    code: i32,
-};
+const HWND_TOP: ?HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, 0))));
+const SWP_NOACTIVATE: UINT = 0x0010;
 
-const DRAWITEMSTRUCT = extern struct {
-    CtlType: UINT,
-    CtlID: UINT,
-    itemID: UINT,
-    itemAction: UINT,
-    itemState: UINT,
-    hwndItem: HWND,
-    hDC: HDC,
-    rcItem: RECT,
-    itemData: usize,
-};
-
-const ODT_TAB: UINT = 101;
-const ODS_SELECTED: UINT = 0x0001;
-const TRANSPARENT: c_int = 1;
-const DT_CENTER: UINT = 0x00000001;
-const DT_VCENTER: UINT = 0x00000004;
-const DT_SINGLELINE: UINT = 0x00000020;
-const DT_END_ELLIPSIS: UINT = 0x00008000;
-
-const INITCOMMONCONTROLSEX = extern struct {
-    dwSize: DWORD,
-    dwICC: DWORD,
-};
-
-const TCITEMW = extern struct {
-    mask: UINT,
-    dwState: DWORD = 0,
-    dwStateMask: DWORD = 0,
-    pszText: ?[*:0]u16 = null,
-    cchTextMax: c_int = 0,
-    iImage: c_int = 0,
-    lParam: LPARAM = 0,
-};
-
-extern "comctl32" fn InitCommonControlsEx(lpInitCtrls: *const INITCOMMONCONTROLSEX) callconv(.winapi) BOOL;
-extern "gdi32" fn CreateFontW(cHeight: c_int, cWidth: c_int, cEscapement: c_int, cOrientation: c_int, cWeight: c_int, bItalic: DWORD, bUnderline: DWORD, bStrikeOut: DWORD, iCharSet: DWORD, iOutPrecision: DWORD, iClipPrecision: DWORD, iQuality: DWORD, iPitchAndFamily: DWORD, pszFaceName: [*:0]const u16) callconv(.winapi) ?*anyopaque;
 extern "gdi32" fn CreateSolidBrush(color: u32) callconv(.winapi) ?*anyopaque;
 extern "gdi32" fn DeleteObject(ho: ?*anyopaque) callconv(.winapi) BOOL;
 extern "user32" fn FillRect(hDC: ?*anyopaque, lprc: *const RECT, hbr: ?*anyopaque) callconv(.winapi) c_int;
-extern "gdi32" fn SetBkMode(hdc: HDC, mode: c_int) callconv(.winapi) c_int;
-extern "gdi32" fn SetTextColor(hdc: HDC, color: u32) callconv(.winapi) u32;
-extern "user32" fn DrawTextW(hdc: HDC, lpchText: [*:0]const u16, cchText: c_int, lprc: *RECT, format: UINT) callconv(.winapi) c_int;
 extern "user32" fn SetCapture(hWnd: HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
 extern "user32" fn SetCursor(hCursor: sys.HCURSOR) callconv(.winapi) sys.HCURSOR;
 
-var ui_font: ?*anyopaque = null;
 var divider_class_registered: bool = false;
+var title_bar_class_registered: bool = false;
+
+const TitleIcon = enum {
+    close_tab,
+    new_tab,
+    dropdown,
+    minimize,
+    maximize,
+    restore,
+    close_window,
+
+    fn text(self: TitleIcon) []const u16 {
+        return switch (self) {
+            .close_tab, .close_window => &comptime utf16Icon(0xE8BB),
+            .new_tab => &comptime utf16Icon(0xE710),
+            .dropdown => &comptime utf16Icon(0xE70D),
+            .minimize => &comptime utf16Icon(0xE921),
+            .maximize => &comptime utf16Icon(0xE922),
+            .restore => &comptime utf16Icon(0xE923),
+        };
+    }
+};
+
+const ProfileMenuCommand = enum(u16) {
+    default = 1,
+    cmd = 2,
+    powershell = 3,
+    pwsh = 4,
+};
+
+const TitleHit = union(enum) {
+    none,
+    drag,
+    window_minimize,
+    window_maximize,
+    window_close,
+    tab: usize,
+    tab_close: usize,
+    new_tab,
+    dropdown,
+
+    fn eql(a: TitleHit, b: TitleHit) bool {
+        return switch (a) {
+            .none => b == .none,
+            .drag => b == .drag,
+            .window_minimize => b == .window_minimize,
+            .window_maximize => b == .window_maximize,
+            .window_close => b == .window_close,
+            .tab => |idx| b == .tab and b.tab == idx,
+            .tab_close => |idx| b == .tab_close and b.tab_close == idx,
+            .new_tab => b == .new_tab,
+            .dropdown => b == .dropdown,
+        };
+    }
+};
+
+fn utf16Icon(comptime codepoint: u21) [1:0]u16 {
+    return .{@intCast(codepoint)};
+}
+
+const TitleBarState = struct {
+    hwnd: HWND,
+    window: *Window,
+    target: ?*d2d.ID2D1HwndRenderTarget = null,
+    d2d_factory: ?*d2d.ID2D1Factory = null,
+    dwrite_factory: ?*d2d.IDWriteFactory = null,
+    text_format: ?*d2d.IDWriteTextFormat = null,
+    tab_text_format: ?*d2d.IDWriteTextFormat = null,
+    icon_format: ?*d2d.IDWriteTextFormat = null,
+    hover: TitleHit = .none,
+    pressed: TitleHit = .none,
+    tracking_mouse_leave: bool = false,
+    tracking_nc_mouse_leave: bool = false,
+
+    fn handleMessage(self: *TitleBarState, hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) LRESULT {
+        switch (msg) {
+            WM_PAINT => {
+                self.paint(hwnd);
+                return 0;
+            },
+            sys.WM_ERASEBKGND => return 1,
+            sys.WM_SIZE => {
+                self.resizeFromClient(hwnd);
+                _ = sys.InvalidateRect(hwnd, null, 0);
+                return 0;
+            },
+            WM_NCHITTEST => return self.hitTestTitleBar(lparam),
+            WM_LBUTTONDOWN => {
+                const hit = self.hitTestClient(lparamX(lparam), lparamY(lparam));
+                self.pressed = hit;
+                self.hover = hit;
+                _ = sys.InvalidateRect(hwnd, null, 0);
+                if (!self.activatePressedOnMouseUp(hit)) {
+                    self.pressed = .none;
+                    _ = sys.PostMessageW(self.window.hwnd.?, sys.WM_NCLBUTTONDOWN, @intCast(sys.HTCAPTION), 0);
+                }
+                return 0;
+            },
+            WM_LBUTTONUP => {
+                const hit = self.hitTestClient(lparamX(lparam), lparamY(lparam));
+                const pressed = self.pressed;
+                self.pressed = .none;
+                if (pressed.eql(hit)) self.performHit(hit);
+                _ = sys.InvalidateRect(hwnd, null, 0);
+                return 0;
+            },
+            WM_MOUSEMOVE => {
+                const hit = self.hitTestClient(lparamX(lparam), lparamY(lparam));
+                if (!self.hover.eql(hit)) {
+                    self.hover = hit;
+                    _ = sys.InvalidateRect(hwnd, null, 0);
+                }
+                self.trackMouseLeave();
+                return 0;
+            },
+            sys.WM_NCMOUSEMOVE => {
+                const hit = @as(LRESULT, @intCast(wparam));
+                self.updateNonClientHover(hit);
+                self.trackNonClientMouseLeave();
+                return 0;
+            },
+            sys.WM_MOUSELEAVE => {
+                self.tracking_mouse_leave = false;
+                self.hover = .none;
+                self.pressed = .none;
+                _ = sys.InvalidateRect(hwnd, null, 0);
+                return 0;
+            },
+            sys.WM_NCMOUSELEAVE => {
+                self.tracking_nc_mouse_leave = false;
+                self.hover = .none;
+                self.pressed = .none;
+                _ = sys.InvalidateRect(hwnd, null, 0);
+                return 0;
+            },
+            sys.WM_NCLBUTTONDOWN => {
+                const nc_hit = @as(LRESULT, @intCast(wparam));
+                switch (nc_hit) {
+                    sys.HTMINBUTTON => {
+                        self.pressed = .window_minimize;
+                        self.hover = .window_minimize;
+                        _ = sys.InvalidateRect(hwnd, null, 0);
+                        self.performHit(.window_minimize);
+                        return 0;
+                    },
+                    sys.HTMAXBUTTON => {
+                        self.pressed = .window_maximize;
+                        self.hover = .window_maximize;
+                        _ = sys.InvalidateRect(hwnd, null, 0);
+                        self.performHit(.window_maximize);
+                        return 0;
+                    },
+                    else => {},
+                }
+                return sys.DefWindowProcW(hwnd, msg, wparam, lparam);
+            },
+            sys.WM_NCLBUTTONUP => {
+                self.pressed = .none;
+                switch (@as(LRESULT, @intCast(wparam))) {
+                    sys.HTMINBUTTON, sys.HTMAXBUTTON => _ = sys.InvalidateRect(hwnd, null, 0),
+                    else => {},
+                }
+                return 0;
+            },
+            else => return sys.DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+
+    fn activatePressedOnMouseUp(_: *TitleBarState, hit: TitleHit) bool {
+        return switch (hit) {
+            .drag, .none => false,
+            else => true,
+        };
+    }
+
+    fn hitTestTitleBar(self: *TitleBarState, lparam: LPARAM) LRESULT {
+        const hwnd = self.window.hwnd orelse return sys.HTCLIENT;
+        var rect: RECT = std.mem.zeroes(RECT);
+        if (sys.GetWindowRect(hwnd, &rect) == 0) return sys.HTCLIENT;
+
+        const x: i32 = signExtendLowWord(lparam);
+        const y: i32 = signExtendHighWord(lparam);
+        const button_area_left = rect.right - WINDOW_BUTTON_WIDTH * WINDOW_BUTTON_COUNT;
+        if (x >= button_area_left and y < rect.top + TITLE_BUTTON_HIT_HEIGHT) {
+            const idx = @divTrunc(x - button_area_left, WINDOW_BUTTON_WIDTH);
+            return switch (idx) {
+                0 => sys.HTMINBUTTON,
+                1 => sys.HTMAXBUTTON,
+                else => sys.HTCLIENT,
+            };
+        }
+
+        return sys.HTCLIENT;
+    }
+
+    fn hitTestClient(self: *TitleBarState, x: i32, y: i32) TitleHit {
+        const window = self.window;
+        const hwnd = window.hwnd orelse return .none;
+        var rect: RECT = std.mem.zeroes(RECT);
+        if (sys.GetClientRect(hwnd, &rect) == 0) return .none;
+        if (y < 0 or y >= window.tabClientHeight()) return .none;
+
+        const button_area_left = rect.right - WINDOW_BUTTON_WIDTH * WINDOW_BUTTON_COUNT;
+        if (x >= button_area_left) {
+            const idx = @divTrunc(x - button_area_left, WINDOW_BUTTON_WIDTH);
+            return switch (idx) {
+                0 => .window_minimize,
+                1 => .window_maximize,
+                else => .window_close,
+            };
+        }
+
+        var tab_x: i32 = TAB_START_X;
+        const controls_right = button_area_left;
+        for (window.tabs.items, 0..) |_, i| {
+            const max_right = controls_right - NEW_TAB_WIDTH - DROPDOWN_WIDTH - 12;
+            if (tab_x >= max_right) break;
+            const width = @min(CUSTOM_TAB_WIDTH, max_right - tab_x);
+            if (x >= tab_x and x < tab_x + width) {
+                if (x >= tab_x + width - TAB_CLOSE_WIDTH) return .{ .tab_close = i };
+                return .{ .tab = i };
+            }
+            tab_x += width + TAB_GAP;
+        }
+
+        if (x >= tab_x + 6 and x < tab_x + NEW_TAB_WIDTH) return .new_tab;
+        if (x >= tab_x + NEW_TAB_WIDTH and x < tab_x + NEW_TAB_WIDTH + DROPDOWN_WIDTH) return .dropdown;
+        return .drag;
+    }
+
+    fn performHit(self: *TitleBarState, hit: TitleHit) void {
+        const window = self.window;
+        const hwnd = window.hwnd orelse return;
+        switch (hit) {
+            .window_minimize => window.minimize(),
+            .window_maximize => window.toggleMaximize(),
+            .window_close => window.closeFromTitleBar(),
+            .tab => |idx| window.activateTab(idx) catch {},
+            .tab_close => |idx| _ = sys.PostMessageW(hwnd, sys.WM_APP_CLOSE_TAB, idx, 0),
+            .new_tab => _ = sys.PostMessageW(hwnd, sys.WM_APP_NEW_TAB, 0, 0),
+            .dropdown => window.showNewTabMenuFromTitleBar(),
+            .drag, .none => {},
+        }
+    }
+
+    fn trackMouseLeave(self: *TitleBarState) void {
+        if (self.tracking_mouse_leave) return;
+        var event: sys.TRACKMOUSEEVENT = .{
+            .cbSize = @sizeOf(sys.TRACKMOUSEEVENT),
+            .dwFlags = sys.TME_LEAVE,
+            .hwndTrack = self.hwnd,
+            .dwHoverTime = 0,
+        };
+        if (sys.TrackMouseEvent(&event) != 0) self.tracking_mouse_leave = true;
+    }
+
+    fn trackNonClientMouseLeave(self: *TitleBarState) void {
+        if (self.tracking_nc_mouse_leave) return;
+        var event: sys.TRACKMOUSEEVENT = .{
+            .cbSize = @sizeOf(sys.TRACKMOUSEEVENT),
+            .dwFlags = sys.TME_LEAVE | sys.TME_NONCLIENT,
+            .hwndTrack = self.hwnd,
+            .dwHoverTime = 0,
+        };
+        if (sys.TrackMouseEvent(&event) != 0) self.tracking_nc_mouse_leave = true;
+    }
+
+    fn updateNonClientHover(self: *TitleBarState, hit: LRESULT) void {
+        const next = hitForNcButton(hit);
+        if (!self.hover.eql(next)) {
+            self.hover = next;
+            _ = sys.InvalidateRect(self.hwnd, null, 0);
+        }
+    }
+
+    fn paint(self: *TitleBarState, hwnd: HWND) void {
+        var ps: sys.PAINTSTRUCT = std.mem.zeroes(sys.PAINTSTRUCT);
+        _ = sys.BeginPaint(hwnd, &ps);
+        defer _ = sys.EndPaint(hwnd, &ps);
+
+        self.render() catch {
+            self.releaseDeviceResources();
+        };
+    }
+
+    fn render(self: *TitleBarState) !void {
+        try self.ensureResources();
+        const target = (self.target orelse return error.Direct2DTargetUnavailable).renderTarget();
+        _ = self.text_format orelse return error.DirectWriteTextFormatUnavailable;
+        const tab_format = self.tab_text_format orelse return error.DirectWriteTextFormatUnavailable;
+        const icon_format = self.icon_format orelse return error.DirectWriteTextFormatUnavailable;
+        const window = self.window;
+
+        var client: RECT = std.mem.zeroes(RECT);
+        if (sys.GetClientRect(self.hwnd, &client) == 0) return;
+
+        target.BeginDraw();
+        const transparent: d2d.D2D_COLOR_F = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        target.Clear(&transparent);
+
+        const bar_bg = blendColor(window.app.config.background, window.app.config.foreground, 0.12);
+        const bg_alpha: f32 = switch (window.app.config.@"background-blur") {
+            .acrylic, .mica, .@"mica-alt", .true => 0.22,
+            else => 0.92,
+        };
+        const bg_brush = try d2dBrush(target, d2dColor(bar_bg, bg_alpha));
+        defer releaseCom(bg_brush);
+        var full_rect = rectF(client.left, client.top, client.right, client.bottom);
+        target.FillRectangle(&full_rect, @ptrCast(bg_brush));
+
+        const text_brush = try d2dBrush(target, d2dColor(window.app.config.foreground, 1.0));
+        defer releaseCom(text_brush);
+        const divider_color = blendColor(window.app.config.background, window.app.config.foreground, 0.32);
+        const divider_brush = try d2dBrush(target, d2dColor(divider_color, 0.46));
+        defer releaseCom(divider_brush);
+        var divider_rect = rectF(client.left, client.bottom - 1, client.right, client.bottom);
+        target.FillRectangle(&divider_rect, @ptrCast(divider_brush));
+
+        const button_area_w = WINDOW_BUTTON_WIDTH * WINDOW_BUTTON_COUNT;
+        const controls_right = client.right - button_area_w;
+        self.drawTabs(target, tab_format, icon_format, @ptrCast(text_brush), controls_right) catch {};
+        self.drawIconButton(target, icon_format, @ptrCast(text_brush), client.right - button_area_w, 0, WINDOW_BUTTON_WIDTH, TOP_BAR_HEIGHT, .minimize, .window_minimize);
+        self.drawIconButton(
+            target,
+            icon_format,
+            @ptrCast(text_brush),
+            client.right - WINDOW_BUTTON_WIDTH * 2,
+            0,
+            WINDOW_BUTTON_WIDTH,
+            TOP_BAR_HEIGHT,
+            if (sys.IsZoomed(window.hwnd.?) != 0) .restore else .maximize,
+            .window_maximize,
+        );
+        self.drawIconButton(target, icon_format, @ptrCast(text_brush), client.right - WINDOW_BUTTON_WIDTH, 0, WINDOW_BUTTON_WIDTH, TOP_BAR_HEIGHT, .close_window, .window_close);
+
+        const hr = target.EndDraw();
+        if (d2d.failed(hr)) return error.Direct2DDrawFailed;
+    }
+
+    fn drawTabs(
+        self: *TitleBarState,
+        target: *d2d.ID2D1RenderTarget,
+        format: *d2d.IDWriteTextFormat,
+        icon_format: *d2d.IDWriteTextFormat,
+        text_brush: *d2d.ID2D1Brush,
+        controls_right: i32,
+    ) !void {
+        const window = self.window;
+        var x: i32 = TAB_START_X;
+        for (window.tabs.items, 0..) |tab, i| {
+            const max_right = controls_right - NEW_TAB_WIDTH - DROPDOWN_WIDTH - 12;
+            if (x >= max_right) break;
+            const width = @min(CUSTOM_TAB_WIDTH, max_right - x);
+            const selected = i == window.current_tab;
+            const bg = if (selected)
+                blendColor(window.app.config.background, window.app.config.foreground, 0.26)
+            else
+                blendColor(window.app.config.background, window.app.config.foreground, 0.08);
+            const brush = try d2dBrush(target, d2dColor(bg, if (selected) 0.76 else 0.34));
+            defer releaseCom(brush);
+            var tab_rect = rectF(x, TAB_TOP, x + width, TAB_BOTTOM);
+            target.FillRectangle(&tab_rect, @ptrCast(brush));
+
+            var text_rect = rectF(x + 16, TAB_TOP, x + width - TAB_CLOSE_WIDTH - 8, TAB_BOTTOM);
+            const utf16 = try std.unicode.utf8ToUtf16LeAllocZ(window.app.alloc, tab.title);
+            defer window.app.alloc.free(utf16);
+            target.DrawText(utf16.ptr, @intCast(utf16.len), format, &text_rect, text_brush, .{ .CLIP = 1 });
+
+            self.drawIconButton(target, icon_format, text_brush, x + width - 32, 11, 24, 24, .close_tab, .{ .tab_close = i });
+            x += width + TAB_GAP;
+        }
+
+        self.drawIconButton(target, icon_format, text_brush, x + 5, TAB_ACTION_TOP, NEW_TAB_WIDTH - 10, TOP_BAR_HEIGHT - TAB_ACTION_TOP, .new_tab, .new_tab);
+        self.drawIconButton(target, icon_format, text_brush, x + NEW_TAB_WIDTH, TAB_ACTION_TOP, DROPDOWN_WIDTH - 8, TOP_BAR_HEIGHT - TAB_ACTION_TOP, .dropdown, .dropdown);
+    }
+
+    fn drawIconButton(
+        self: *TitleBarState,
+        target: *d2d.ID2D1RenderTarget,
+        format: *d2d.IDWriteTextFormat,
+        text_brush: *d2d.ID2D1Brush,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        icon: TitleIcon,
+        hit: TitleHit,
+    ) void {
+        if (self.buttonBackground(hit)) |bg| {
+            const brush = d2dBrush(target, bg.color) catch return;
+            defer releaseCom(brush);
+            var bg_rect = rectF(x, y, x + w, y + h);
+            target.FillRectangle(&bg_rect, @ptrCast(brush));
+        }
+        var r = rectF(x, y, x + w, y + h);
+        const text = icon.text();
+        target.DrawText(@ptrCast(text.ptr), @intCast(text.len), format, &r, text_brush, .{ .CLIP = 1 });
+    }
+
+    fn buttonBackground(self: *const TitleBarState, hit: TitleHit) ?struct { color: d2d.D2D_COLOR_F } {
+        const pressed = self.pressed.eql(hit);
+        const hovered = self.hover.eql(hit);
+        if (!pressed and !hovered) return null;
+
+        if (hit.eql(.window_close)) {
+            return .{ .color = d2dColor(if (pressed) CLOSE_PRESSED else CLOSE_HOVER, 1.0) };
+        }
+
+        const foreground = self.window.app.config.foreground;
+        const background = self.window.app.config.background;
+        const color = blendColor(background, foreground, if (pressed) 0.72 else 0.58);
+        return .{ .color = d2dColor(color, if (pressed) TITLE_PRESSED_ALPHA else TITLE_HOVER_ALPHA) };
+    }
+
+    fn ensureResources(self: *TitleBarState) !void {
+        if (self.d2d_factory == null) {
+            var raw_d2d: *anyopaque = undefined;
+            const hr = d2d.D2D1CreateFactory(.SINGLE_THREADED, &d2d.IID_ID2D1Factory, null, &raw_d2d);
+            if (d2d.failed(hr)) return error.Direct2DUnavailable;
+            self.d2d_factory = @ptrCast(@alignCast(raw_d2d));
+        }
+        if (self.dwrite_factory == null) {
+            var raw_dwrite: *d2d.IUnknown = undefined;
+            const hr = d2d.DWriteCreateFactory(.SHARED, &d2d.IID_IDWriteFactory, &raw_dwrite);
+            if (d2d.failed(hr)) return error.DirectWriteUnavailable;
+            self.dwrite_factory = @ptrCast(@alignCast(raw_dwrite));
+        }
+        if (self.text_format == null) {
+            const factory = self.dwrite_factory orelse return error.DirectWriteUnavailable;
+            self.text_format = try createTextFormat(factory, "Segoe UI", 13.0, .CENTER);
+        }
+        if (self.tab_text_format == null) {
+            const factory = self.dwrite_factory orelse return error.DirectWriteUnavailable;
+            self.tab_text_format = try createTextFormat(factory, "Segoe UI", 13.0, .LEADING);
+        }
+        if (self.icon_format == null) {
+            const factory = self.dwrite_factory orelse return error.DirectWriteUnavailable;
+            self.icon_format = createTextFormat(factory, "Segoe Fluent Icons", TITLE_ICON_SIZE, .CENTER) catch
+                try createTextFormat(factory, "Segoe MDL2 Assets", TITLE_ICON_SIZE, .CENTER);
+        }
+        if (self.target == null) {
+            try self.createRenderTarget();
+        }
+    }
+
+    fn createRenderTarget(self: *TitleBarState) !void {
+        const factory = self.d2d_factory orelse return error.Direct2DUnavailable;
+        var rect: RECT = std.mem.zeroes(RECT);
+        if (sys.GetClientRect(self.hwnd, &rect) == 0) return error.Direct2DTargetUnavailable;
+        var rt_props: d2d.D2D1_RENDER_TARGET_PROPERTIES = .{
+            .type = .DEFAULT,
+            .pixelFormat = .{
+                .format = .B8G8R8A8_UNORM,
+                .alphaMode = .PREMULTIPLIED,
+            },
+            .dpiX = 96,
+            .dpiY = 96,
+            .usage = .{},
+            .minLevel = .DEFAULT,
+        };
+        var hwnd_props: d2d.D2D1_HWND_RENDER_TARGET_PROPERTIES = .{
+            .hwnd = self.hwnd,
+            .pixelSize = .{
+                .width = @intCast(@max(1, rect.right - rect.left)),
+                .height = @intCast(@max(1, rect.bottom - rect.top)),
+            },
+            .presentOptions = .{},
+        };
+        var target: *d2d.ID2D1HwndRenderTarget = undefined;
+        const hr = factory.CreateHwndRenderTarget(&rt_props, &hwnd_props, &target);
+        if (d2d.failed(hr)) return error.Direct2DTargetUnavailable;
+        target.renderTarget().SetTextAntialiasMode(.GRAYSCALE);
+        self.target = target;
+    }
+
+    fn resizeFromClient(self: *TitleBarState, hwnd: HWND) void {
+        if (self.target) |target| {
+            var rect: RECT = std.mem.zeroes(RECT);
+            if (sys.GetClientRect(hwnd, &rect) == 0) return;
+            const size: d2d.D2D_SIZE_U = .{
+                .width = @intCast(@max(1, rect.right - rect.left)),
+                .height = @intCast(@max(1, rect.bottom - rect.top)),
+            };
+            if (d2d.failed(target.Resize(&size))) {
+                self.releaseDeviceResources();
+            }
+        }
+    }
+
+    fn releaseDeviceResources(self: *TitleBarState) void {
+        releaseCom(self.target);
+        self.target = null;
+    }
+
+    fn hitForNcButton(hit: LRESULT) TitleHit {
+        return switch (hit) {
+            sys.HTMINBUTTON => .window_minimize,
+            sys.HTMAXBUTTON => .window_maximize,
+            else => .none,
+        };
+    }
+};
 
 const DividerState = struct {
     hwnd: HWND,
@@ -153,7 +613,7 @@ const TabState = struct {
 
 app: *App,
 hwnd: ?HWND = null,
-tab_hwnd: ?HWND = null,
+title_bar: ?TitleBarState = null,
 primary_surface: *Surface,
 tree: ?SplitTree = null,
 focused_surface: ?*Surface = null,
@@ -188,8 +648,8 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     }
     self.applyWindowEffects();
 
-    try self.createTabControl();
     _ = sys.SetWindowLongPtrW(self.hwnd.?, sys.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
+    try self.createTitleBar();
 
     _ = try self.insertTab(0, opts, true);
     if (self.quick_terminal) self.applyQuickTerminalLayout() else self.applyConfiguredWindowSize();
@@ -207,15 +667,12 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 
 pub fn deinit(self: *Window) void {
     self.destroyDividers();
+    self.destroyTitleBar();
     self.syncActiveTabFromWindow();
     for (self.tabs.items) |*tab| self.deinitTab(tab);
     self.tabs.deinit(self.app.alloc);
     self.tree = null;
     self.surface_initialized = false;
-    if (self.tab_hwnd) |hwnd| {
-        _ = sys.DestroyWindow(hwnd);
-        self.tab_hwnd = null;
-    }
     if (self.hwnd) |hwnd| {
         _ = sys.DestroyWindow(hwnd);
         self.hwnd = null;
@@ -251,7 +708,7 @@ fn createHwnd(self: *Window, title_override: ?[:0]const u8) !void {
         if (self.quick_terminal) @intCast(sys.WS_EX_TOPMOST) else 0,
         class_name,
         if (title) |v| v.ptr else std.unicode.utf8ToUtf16LeStringLiteral("Ghostty"),
-        if (self.quick_terminal) sys.WS_OVERLAPPEDWINDOW & ~sys.WS_CAPTION_BIT else sys.WS_OVERLAPPEDWINDOW,
+        TOPLEVEL_STYLE,
         sys.CW_USEDEFAULT,
         sys.CW_USEDEFAULT,
         900,
@@ -297,9 +754,17 @@ pub fn applyWindowEffects(self: *Window) void {
         @sizeOf(@TypeOf(backdrop)),
     );
 
+    const corner: sys.DWM_WINDOW_CORNER_PREFERENCE = .round;
+    _ = sys.DwmSetWindowAttribute(
+        hwnd,
+        sys.DWMWA_WINDOW_CORNER_PREFERENCE,
+        &corner,
+        @sizeOf(@TypeOf(corner)),
+    );
+
     const caption_color: u32 = switch (self.app.config.@"background-blur") {
         .false => bgrColor(self.app.config.background),
-        else => sys.DWMWA_COLOR_NONE,
+        else => sys.DWMWA_COLOR_DEFAULT,
     };
     _ = sys.DwmSetWindowAttribute(
         hwnd,
@@ -307,11 +772,16 @@ pub fn applyWindowEffects(self: *Window) void {
         &caption_color,
         @sizeOf(@TypeOf(caption_color)),
     );
+
+    const border_color: u32 = switch (self.app.config.@"background-blur") {
+        .false => bgrColor(self.app.config.background),
+        else => sys.DWMWA_COLOR_NONE,
+    };
     _ = sys.DwmSetWindowAttribute(
         hwnd,
         sys.DWMWA_BORDER_COLOR,
-        &caption_color,
-        @sizeOf(@TypeOf(caption_color)),
+        &border_color,
+        @sizeOf(@TypeOf(border_color)),
     );
 
     const text_color: u32 = bgrColor(self.app.config.foreground);
@@ -332,7 +802,24 @@ pub fn applyWindowEffects(self: *Window) void {
             .b = self.app.config.background.b,
         },
     );
+    self.applyTitleBarEffects();
     self.applySurfaceWindowEffects();
+}
+
+fn applyTitleBarEffects(self: *Window) void {
+    if (self.title_bar) |bar| {
+        sys.setAccentPolicy(
+            bar.hwnd,
+            sys.accentStateForBlur(self.app.config.@"background-blur"),
+            self.app.config.@"background-opacity",
+            .{
+                .r = self.app.config.background.r,
+                .g = self.app.config.background.g,
+                .b = self.app.config.background.b,
+            },
+        );
+        _ = sys.InvalidateRect(bar.hwnd, null, 0);
+    }
 }
 
 fn applySurfaceWindowEffects(self: *Window) void {
@@ -346,50 +833,6 @@ fn bgrColor(color: configpkg.Config.Color) u32 {
     return (@as(u32, color.b) << 16) |
         (@as(u32, color.g) << 8) |
         @as(u32, color.r);
-}
-
-fn hasWindowBackdrop(self: *const Window) bool {
-    return switch (self.app.config.@"background-blur") {
-        .false => false,
-        else => true,
-    };
-}
-
-pub fn handleDrawItem(self: *Window, lparam: LPARAM) LRESULT {
-    const dis: *DRAWITEMSTRUCT = @ptrFromInt(@as(usize, @bitCast(lparam)));
-    if (dis.CtlType != ODT_TAB) return 0;
-    if (self.tab_hwnd == null or dis.hwndItem != self.tab_hwnd.?) return 0;
-    if (dis.itemID >= self.tabs.items.len) return 0;
-
-    var rect = dis.rcItem;
-    const selected = (dis.itemState & ODS_SELECTED) != 0;
-    if (!self.hasWindowBackdrop() or selected) {
-        const bg = if (selected)
-            blendColor(self.app.config.background, self.app.config.foreground, 0.18)
-        else
-            self.app.config.background;
-        const brush = CreateSolidBrush(bgrColor(bg));
-        if (brush) |b| {
-            _ = FillRect(dis.hDC, &rect, b);
-            _ = DeleteObject(b);
-        }
-    }
-
-    rect.left += 8;
-    rect.right -= 8;
-    _ = SetBkMode(dis.hDC, TRANSPARENT);
-    _ = SetTextColor(dis.hDC, bgrColor(self.app.config.foreground));
-    const title = self.tabs.items[dis.itemID].title;
-    const utf16 = std.unicode.utf8ToUtf16LeAllocZ(self.app.alloc, title) catch return 1;
-    defer self.app.alloc.free(utf16);
-    _ = DrawTextW(
-        dis.hDC,
-        utf16.ptr,
-        @intCast(utf16.len),
-        &rect,
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-    );
-    return 1;
 }
 
 fn blendColor(a: configpkg.Config.Color, b: configpkg.Config.Color, amount: f32) configpkg.Config.Color {
@@ -406,47 +849,136 @@ fn blendChannel(a: u8, b: u8, amount: f32) u8 {
     return @intFromFloat(@round(af + (bf - af) * amount));
 }
 
-fn createTabControl(self: *Window) !void {
-    const icc: INITCOMMONCONTROLSEX = .{
-        .dwSize = @sizeOf(INITCOMMONCONTROLSEX),
-        .dwICC = ICC_TAB_CLASSES,
-    };
-    _ = InitCommonControlsEx(&icc);
-    self.tab_hwnd = sys.CreateWindowExW(
+fn releaseCom(value: anytype) void {
+    switch (@typeInfo(@TypeOf(value))) {
+        .optional => if (value) |ptr| releaseComPtr(ptr),
+        .pointer => releaseComPtr(value),
+        else => @compileError("releaseCom expects a COM pointer or optional COM pointer"),
+    }
+}
+
+fn releaseComPtr(ptr: anytype) void {
+    const unknown: *d2d.IUnknown = @ptrCast(@alignCast(ptr));
+    _ = unknown.Release();
+}
+
+fn createTextFormat(
+    factory: *d2d.IDWriteFactory,
+    comptime family: []const u8,
+    size: f32,
+    alignment: d2d.DWRITE_TEXT_ALIGNMENT,
+) !*d2d.IDWriteTextFormat {
+    var format: *d2d.IDWriteTextFormat = undefined;
+    const hr = factory.CreateTextFormat(
+        std.unicode.utf8ToUtf16LeStringLiteral(family),
+        null,
+        .NORMAL,
+        .NORMAL,
+        .NORMAL,
+        size,
+        std.unicode.utf8ToUtf16LeStringLiteral("en-us"),
+        &format,
+    );
+    if (d2d.failed(hr)) return error.DirectWriteTextFormatUnavailable;
+    _ = format.SetTextAlignment(alignment);
+    _ = format.SetParagraphAlignment(.CENTER);
+    _ = format.SetWordWrapping(.NO_WRAP);
+    return format;
+}
+
+fn createTitleBar(self: *Window) !void {
+    const parent = self.hwnd orelse return error.Win32Error;
+    try registerTitleBarClass();
+    const hwnd = sys.CreateWindowExW(
         0,
-        std.unicode.utf8ToUtf16LeStringLiteral("SysTabControl32"),
-        std.unicode.utf8ToUtf16LeStringLiteral(""),
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | TCS_FIXEDWIDTH | TCS_OWNERDRAWFIXED,
+        std.unicode.utf8ToUtf16LeStringLiteral("GhosttyTitleBar"),
+        null,
+        WS_CHILD | WS_VISIBLE,
         0,
         0,
         0,
-        TAB_HEIGHT,
-        self.hwnd,
+        TOP_BAR_HEIGHT,
+        parent,
         null,
         sys.GetModuleHandleW(null),
         null,
     ) orelse return error.Win32Error;
-    if (ui_font == null) {
-        ui_font = CreateFontW(
-            -18,
-            0,
-            0,
-            0,
-            400,
-            0,
-            0,
-            0,
-            1,
-            0,
-            0,
-            0,
-            0,
-            std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
-        );
+    self.title_bar = .{ .hwnd = hwnd, .window = self };
+    _ = sys.SetWindowLongPtrW(hwnd, sys.GWLP_USERDATA, @bitCast(@intFromPtr(&self.title_bar.?)));
+    self.applyTitleBarEffects();
+}
+
+fn destroyTitleBar(self: *Window) void {
+    if (self.title_bar) |*bar| {
+        bar.releaseDeviceResources();
+        releaseCom(bar.icon_format);
+        bar.icon_format = null;
+        releaseCom(bar.tab_text_format);
+        bar.tab_text_format = null;
+        releaseCom(bar.text_format);
+        bar.text_format = null;
+        releaseCom(bar.dwrite_factory);
+        bar.dwrite_factory = null;
+        releaseCom(bar.d2d_factory);
+        bar.d2d_factory = null;
+        _ = sys.DestroyWindow(bar.hwnd);
+        self.title_bar = null;
     }
-    if (ui_font) |font| {
-        _ = sys.SendMessageW(self.tab_hwnd.?, WM_SETFONT, @intFromPtr(font), 1);
-    }
+}
+
+fn registerTitleBarClass() !void {
+    if (title_bar_class_registered) return;
+    const class_name = std.unicode.utf8ToUtf16LeStringLiteral("GhosttyTitleBar");
+    const hinstance = sys.GetModuleHandleW(null);
+    const wc: sys.WNDCLASSEXW = .{
+        .cbSize = @sizeOf(sys.WNDCLASSEXW),
+        .style = sys.CS_HREDRAW | sys.CS_VREDRAW,
+        .lpfnWndProc = titleBarWndProc,
+        .cbClsExtra = 0,
+        .cbWndExtra = 0,
+        .hInstance = hinstance,
+        .hIcon = null,
+        .hCursor = sys.LoadCursorW(null, sys.IDC_ARROW),
+        .hbrBackground = null,
+        .lpszMenuName = null,
+        .lpszClassName = class_name,
+        .hIconSm = null,
+    };
+    if (sys.RegisterClassExW(&wc) == 0) return error.Win32Error;
+    title_bar_class_registered = true;
+}
+
+fn titleBarWndProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.winapi) LRESULT {
+    const ptr = sys.GetWindowLongPtrW(hwnd, sys.GWLP_USERDATA);
+    if (ptr == 0) return sys.DefWindowProcW(hwnd, msg, wparam, lparam);
+    const bar: *TitleBarState = @ptrFromInt(@as(usize, @bitCast(ptr)));
+    return bar.handleMessage(hwnd, msg, wparam, lparam);
+}
+
+fn d2dColor(color: configpkg.Config.Color, alpha: f32) d2d.D2D_COLOR_F {
+    return .{
+        .r = @as(f32, @floatFromInt(color.r)) / 255.0,
+        .g = @as(f32, @floatFromInt(color.g)) / 255.0,
+        .b = @as(f32, @floatFromInt(color.b)) / 255.0,
+        .a = alpha,
+    };
+}
+
+fn d2dBrush(target: *d2d.ID2D1RenderTarget, color: d2d.D2D_COLOR_F) !*d2d.ID2D1SolidColorBrush {
+    var mutable_color = color;
+    var brush: *d2d.ID2D1SolidColorBrush = undefined;
+    const hr = target.CreateSolidColorBrush(&mutable_color, &brush);
+    if (d2d.failed(hr)) return error.Direct2DBrushUnavailable;
+    return brush;
+}
+
+fn rectF(left: i32, top: i32, right: i32, bottom: i32) d2d.D2D_RECT_F {
+    return .{
+        .left = @floatFromInt(left),
+        .top = @floatFromInt(top),
+        .right = @floatFromInt(right),
+        .bottom = @floatFromInt(bottom),
+    };
 }
 
 fn registerDividerClass() !void {
@@ -488,6 +1020,128 @@ fn destroyDividers(self: *Window) void {
         self.app.alloc.destroy(divider);
     }
     self.dividers.deinit(self.app.alloc);
+}
+
+pub fn paintTopBar(self: *Window, hwnd: HWND) void {
+    _ = self;
+    var ps: sys.PAINTSTRUCT = std.mem.zeroes(sys.PAINTSTRUCT);
+    _ = sys.BeginPaint(hwnd, &ps);
+    _ = sys.EndPaint(hwnd, &ps);
+}
+
+fn minimize(self: *Window) void {
+    const hwnd = self.hwnd orelse return;
+    self.invalidateTopBar();
+    _ = sys.ShowWindow(hwnd, sys.SW_MINIMIZE);
+}
+
+fn toggleMaximize(self: *Window) void {
+    const hwnd = self.hwnd orelse return;
+    self.invalidateTopBar();
+    _ = sys.ShowWindow(hwnd, if (sys.IsZoomed(hwnd) != 0) sys.SW_RESTORE else sys.SW_MAXIMIZE);
+    self.relayout();
+    self.invalidateTopBar();
+}
+
+fn closeFromTitleBar(self: *Window) void {
+    const hwnd = self.hwnd orelse return;
+    _ = sys.SendMessageW(hwnd, sys.WM_SYSCOMMAND, sys.SC_CLOSE, 0);
+}
+
+fn handleTabBarClick(self: *Window, x: i32, y: i32) bool {
+    const hwnd = self.hwnd orelse return false;
+    var rect: RECT = std.mem.zeroes(RECT);
+    if (sys.GetClientRect(hwnd, &rect) == 0) return false;
+    if (y < 0 or y >= self.tabClientHeight()) return false;
+
+    const button_area_left = rect.right - WINDOW_BUTTON_WIDTH * WINDOW_BUTTON_COUNT;
+    if (x >= button_area_left) {
+        const idx = @divTrunc(x - button_area_left, WINDOW_BUTTON_WIDTH);
+        switch (idx) {
+            0 => _ = sys.ShowWindow(hwnd, sys.SW_MINIMIZE),
+            1 => _ = sys.ShowWindow(hwnd, if (sys.IsZoomed(hwnd) != 0) sys.SW_RESTORE else sys.SW_MAXIMIZE),
+            else => _ = sys.PostMessageW(hwnd, sys.WM_CLOSE, 0, 0),
+        }
+        return true;
+    }
+
+    const controls_right = button_area_left;
+    var tab_x: i32 = TAB_START_X;
+    for (self.tabs.items, 0..) |_, i| {
+        const max_right = controls_right - NEW_TAB_WIDTH - DROPDOWN_WIDTH - 12;
+        if (tab_x >= max_right) break;
+        const width = @min(CUSTOM_TAB_WIDTH, max_right - tab_x);
+        if (x >= tab_x and x < tab_x + width) {
+            if (x >= tab_x + width - TAB_CLOSE_WIDTH) {
+                _ = sys.PostMessageW(hwnd, sys.WM_APP_CLOSE_TAB, i, 0);
+            } else {
+                self.activateTab(i) catch {};
+            }
+            return true;
+        }
+        tab_x += width + TAB_GAP;
+    }
+
+    if (x >= tab_x + 6 and x < tab_x + NEW_TAB_WIDTH) {
+        _ = sys.PostMessageW(hwnd, sys.WM_APP_NEW_TAB, 0, 0);
+        return true;
+    }
+    if (x >= tab_x + NEW_TAB_WIDTH and x < tab_x + NEW_TAB_WIDTH + DROPDOWN_WIDTH) {
+        self.showNewTabMenu(tab_x + NEW_TAB_WIDTH, TOP_BAR_HEIGHT);
+        return true;
+    }
+    return false;
+}
+
+fn showNewTabMenuFromTitleBar(self: *Window) void {
+    const hwnd = self.hwnd orelse return;
+    var rect: RECT = std.mem.zeroes(RECT);
+    if (sys.GetClientRect(hwnd, &rect) == 0) return;
+
+    const controls_right = rect.right - WINDOW_BUTTON_WIDTH * WINDOW_BUTTON_COUNT;
+    var tab_x: i32 = TAB_START_X;
+    for (self.tabs.items) |_| {
+        const max_right = controls_right - NEW_TAB_WIDTH - DROPDOWN_WIDTH - 12;
+        if (tab_x >= max_right) break;
+        const width = @min(CUSTOM_TAB_WIDTH, max_right - tab_x);
+        tab_x += width + TAB_GAP;
+    }
+
+    self.showNewTabMenu(tab_x + NEW_TAB_WIDTH, TOP_BAR_HEIGHT);
+}
+
+fn showNewTabMenu(self: *Window, x: i32, y: i32) void {
+    const hwnd = self.hwnd orelse return;
+    const menu = sys.CreatePopupMenu() orelse return;
+    defer _ = sys.DestroyMenu(menu);
+
+    _ = sys.AppendMenuW(menu, sys.MF_STRING, @intFromEnum(ProfileMenuCommand.default), std.unicode.utf8ToUtf16LeStringLiteral("Default"));
+    _ = sys.AppendMenuW(menu, sys.MF_SEPARATOR, 0, null);
+    _ = sys.AppendMenuW(menu, sys.MF_STRING, @intFromEnum(ProfileMenuCommand.cmd), std.unicode.utf8ToUtf16LeStringLiteral("Command Prompt"));
+    _ = sys.AppendMenuW(menu, sys.MF_STRING, @intFromEnum(ProfileMenuCommand.powershell), std.unicode.utf8ToUtf16LeStringLiteral("Windows PowerShell"));
+    if (commandExists(std.unicode.utf8ToUtf16LeStringLiteral("C:\\Program Files\\PowerShell\\7\\pwsh.exe"))) {
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, @intFromEnum(ProfileMenuCommand.pwsh), std.unicode.utf8ToUtf16LeStringLiteral("PowerShell 7"));
+    }
+
+    var pt: sys.POINT = .{ .x = x, .y = y };
+    if (self.title_bar) |bar| {
+        if (sys.ClientToScreen(bar.hwnd, &pt) == 0) return;
+    } else if (sys.ClientToScreen(hwnd, &pt) == 0) return;
+
+    const cmd = sys.TrackPopupMenu(
+        menu,
+        sys.TPM_RETURNCMD | sys.TPM_LEFTALIGN | sys.TPM_TOPALIGN,
+        pt.x,
+        pt.y,
+        0,
+        hwnd,
+        null,
+    );
+    if (cmd != 0) _ = sys.PostMessageW(hwnd, sys.WM_APP_NEW_PROFILE_TAB, cmd, 0);
+}
+
+fn commandExists(path: [*:0]const u16) bool {
+    return sys.GetFileAttributesW(path) != sys.INVALID_FILE_ATTRIBUTES;
 }
 
 fn ensureDividerCount(self: *Window, count: usize) !void {
@@ -699,7 +1353,7 @@ fn insertTab(self: *Window, raw_index: usize, opts: CreateOptions, select: bool)
         try self.activateTab(index);
     } else {
         self.hideTabSurfaces(&self.tabs.items[index]);
-        _ = sys.SendMessageW(self.tab_hwnd.?, TCM_SETCURSEL, self.current_tab, 0);
+        self.invalidateTopBar();
     }
 
     return index;
@@ -760,13 +1414,15 @@ pub fn setActiveTabTitle(self: *Window, title: [:0]const u8) !void {
 }
 
 fn updateTabVisibility(self: *Window) void {
-    const hwnd = self.tab_hwnd orelse return;
-    _ = sys.ShowWindow(hwnd, if (self.tabs.items.len > 1) sys.SW_SHOWNORMAL else SW_HIDE);
-    self.updateTabMetrics();
+    self.invalidateTopBar();
 }
 
-fn tabClientHeight(self: *Window) i32 {
-    return if (self.tabs.items.len > 1) TAB_HEIGHT else 0;
+fn tabClientHeight(_: *Window) i32 {
+    return TOP_BAR_HEIGHT;
+}
+
+fn invalidateTopBar(self: *Window) void {
+    if (self.title_bar) |bar| _ = sys.InvalidateRect(bar.hwnd, null, 0);
 }
 
 fn tabLeaves(tab: *TabState, buf: []*Surface) []const *Surface {
@@ -789,58 +1445,18 @@ fn showTabSurfaces(_: *Window, tab: *TabState) void {
 }
 
 fn rebuildTabControl(self: *Window) void {
-    const hwnd = self.tab_hwnd orelse return;
-    _ = sys.SendMessageW(hwnd, TCM_DELETEALLITEMS, 0, 0);
-    for (self.tabs.items, 0..) |_, i| self.insertTabControlItem(i) catch {};
-    if (self.tabs.items.len > 0) {
-        _ = sys.SendMessageW(hwnd, TCM_SETCURSEL, self.current_tab, 0);
-    }
-    self.updateTabMetrics();
-}
-
-fn updateTabMetrics(self: *Window) void {
-    const hwnd = self.tab_hwnd orelse return;
-    if (self.tabs.items.len <= 1) return;
-
-    var rect: RECT = std.mem.zeroes(RECT);
-    if (sys.GetClientRect(self.hwnd orelse return, &rect) == 0) return;
-
-    const total_width = rect.right - rect.left;
-    if (total_width <= 0) return;
-
-    const tabs_i32: i32 = @intCast(self.tabs.items.len);
-    const width = @max(110, @divTrunc(total_width - 24, tabs_i32));
-    const size_param: LPARAM = (@as(LPARAM, TAB_HEIGHT) << 16) | @as(LPARAM, @intCast(width & 0xFFFF));
-    _ = sys.SendMessageW(hwnd, TCM_SETITEMSIZE, 0, size_param);
-    _ = sys.InvalidateRect(hwnd, null, 1);
-}
-
-fn insertTabControlItem(self: *Window, index: usize) !void {
-    const hwnd = self.tab_hwnd orelse return;
-    const utf16 = try std.unicode.utf8ToUtf16LeAllocZ(self.app.alloc, self.tabs.items[index].title);
-    defer self.app.alloc.free(utf16);
-    var item: TCITEMW = .{
-        .mask = TCIF_TEXT,
-        .pszText = utf16.ptr,
-    };
-    _ = sys.SendMessageW(hwnd, TCM_INSERTITEMW, index, @bitCast(@intFromPtr(&item)));
+    self.invalidateTopBar();
 }
 
 fn updateTabControlTitle(self: *Window, index: usize) void {
-    const hwnd = self.tab_hwnd orelse return;
-    const utf16 = std.unicode.utf8ToUtf16LeAllocZ(self.app.alloc, self.tabs.items[index].title) catch return;
-    defer self.app.alloc.free(utf16);
-    var item: TCITEMW = .{
-        .mask = TCIF_TEXT,
-        .pszText = utf16.ptr,
-    };
-    _ = sys.SendMessageW(hwnd, TCM_SETITEMW, index, @bitCast(@intFromPtr(&item)));
+    _ = index;
+    self.invalidateTopBar();
 }
 
 fn activateTab(self: *Window, index: usize) !void {
     if (self.tabs.items.len == 0 or index >= self.tabs.items.len) return;
     if (index == self.current_tab and self.tree != null) {
-        _ = sys.SendMessageW(self.tab_hwnd.?, TCM_SETCURSEL, index, 0);
+        self.invalidateTopBar();
         self.relayout();
         if (self.focused_surface) |surface| _ = sys.SetFocus(surface.hwnd);
         return;
@@ -854,8 +1470,8 @@ fn activateTab(self: *Window, index: usize) !void {
     self.current_tab = index;
     self.loadActiveTabIntoWindow();
     self.showTabSurfaces(&self.tabs.items[self.current_tab]);
-    if (self.tab_hwnd) |hwnd| _ = sys.SendMessageW(hwnd, TCM_SETCURSEL, index, 0);
     self.relayout();
+    self.invalidateTopBar();
     if (self.focused_surface) |surface| _ = sys.SetFocus(surface.hwnd);
 }
 
@@ -873,18 +1489,26 @@ fn findTabIndexForSurface(self: *Window, surface: *Surface) ?usize {
 
 fn closeTabAt(self: *Window, index: usize) void {
     if (index >= self.tabs.items.len) return;
+    if (self.tabs.items.len <= 1) {
+        if (self.hwnd) |hwnd| _ = sys.PostMessageW(hwnd, sys.WM_CLOSE, 0, 0);
+        return;
+    }
     const was_current = index == self.current_tab;
-
-    if (was_current and self.tree != null) {
+    if (self.tabs.items.len > 0 and self.tree != null and self.current_tab < self.tabs.items.len) {
         self.syncActiveTabFromWindow();
+    }
+
+    if (was_current) {
         self.tree = null;
         self.focused_surface = null;
         self.surface_initialized = false;
+    } else {
+        self.hideTabSurfaces(&self.tabs.items[index]);
     }
 
     var tab = self.tabs.orderedRemove(index);
     self.deinitTab(&tab);
-    if (self.tab_hwnd) |hwnd| _ = sys.SendMessageW(hwnd, TCM_DELETEITEM, index, 0);
+    self.invalidateTopBar();
 
     if (self.tabs.items.len == 0) {
         self.tree = null;
@@ -909,17 +1533,28 @@ fn closeTabAt(self: *Window, index: usize) void {
 
     self.updateTabVisibility();
     self.rebuildTabControl();
-    self.activateTab(self.current_tab) catch {};
+    if (was_current) {
+        self.activateTab(self.current_tab) catch {};
+    } else {
+        self.relayout();
+        if (self.focused_surface) |surface| _ = sys.SetFocus(surface.hwnd);
+    }
 }
 
 fn closeEmptyTabAt(self: *Window, index: usize) void {
     if (index >= self.tabs.items.len) return;
     const was_current = index == self.current_tab;
 
+    if (self.tabs.items.len > 0 and self.tree != null and self.current_tab < self.tabs.items.len) {
+        self.syncActiveTabFromWindow();
+    }
+
     if (was_current) {
         self.tree = null;
         self.focused_surface = null;
         self.surface_initialized = false;
+    } else {
+        self.hideTabSurfaces(&self.tabs.items[index]);
     }
 
     const tab = self.tabs.orderedRemove(index);
@@ -945,7 +1580,12 @@ fn closeEmptyTabAt(self: *Window, index: usize) void {
 
     self.updateTabVisibility();
     self.rebuildTabControl();
-    self.activateTab(self.current_tab) catch {};
+    if (was_current) {
+        self.activateTab(self.current_tab) catch {};
+    } else {
+        self.relayout();
+        if (self.focused_surface) |surface| _ = sys.SetFocus(surface.hwnd);
+    }
 }
 
 pub fn closeTab(self: *Window, mode: apprt.action.CloseTabMode) void {
@@ -1045,7 +1685,7 @@ pub fn applyConfiguredWindowSize(self: *Window) void {
     const h: i32 = @intCast(@as(i32, @intCast(@max(4, cfg_h) * cell_height)) + self.tabClientHeight());
 
     var rect: RECT = .{ .left = 0, .top = 0, .right = w, .bottom = h };
-    _ = sys.AdjustWindowRectEx(&rect, sys.WS_OVERLAPPEDWINDOW, 0, 0);
+    _ = sys.AdjustWindowRectEx(&rect, TOPLEVEL_STYLE, 0, 0);
     _ = sys.SetWindowPos(hwnd, null, 0, 0, rect.right - rect.left, rect.bottom - rect.top, 0x0002 | 0x0004);
 }
 
@@ -1088,10 +1728,18 @@ pub fn relayout(self: *Window) void {
     const hwnd = self.hwnd orelse return;
     var rect: RECT = std.mem.zeroes(RECT);
     if (sys.GetClientRect(hwnd, &rect) == 0) return;
-    self.updateTabMetrics();
+    self.invalidateTopBar();
     const tab_h = self.tabClientHeight();
-    if (self.tab_hwnd) |tab_hwnd| {
-        _ = sys.SetWindowPos(tab_hwnd, null, 0, 0, rect.right - rect.left, tab_h, 0x0004);
+    if (self.title_bar) |bar| {
+        _ = sys.SetWindowPos(
+            bar.hwnd,
+            HWND_TOP,
+            0,
+            0,
+            rect.right - rect.left,
+            tab_h,
+            SWP_NOACTIVATE,
+        );
     }
     const bounds = SplitTree.Rect{
         .x = 0,
@@ -1111,6 +1759,31 @@ fn relayoutCb(surface: *Surface, rect: SplitTree.Rect) void {
 pub fn newTab(self: *Window, opts: CreateOptions) !void {
     const insert_at = if (self.tabs.items.len == 0) 0 else self.current_tab + 1;
     _ = try self.insertTab(insert_at, opts, true);
+}
+
+fn newProfileTab(self: *Window, command: ProfileMenuCommand) !void {
+    var opts = try self.createProfileOptions(command);
+    defer opts.deinit(self.app.alloc);
+    try self.newTab(opts);
+}
+
+fn createProfileOptions(self: *Window, command: ProfileMenuCommand) !CreateOptions {
+    return switch (command) {
+        .default => .none,
+        .cmd => try self.createDirectCommandOptions(&.{"cmd.exe"}),
+        .powershell => try self.createDirectCommandOptions(&.{"powershell.exe"}),
+        .pwsh => try self.createDirectCommandOptions(&.{"C:\\Program Files\\PowerShell\\7\\pwsh.exe"}),
+    };
+}
+
+fn createDirectCommandOptions(self: *Window, args: []const []const u8) !CreateOptions {
+    const alloc = self.app.alloc;
+    const direct = try alloc.alloc([:0]const u8, args.len);
+    errdefer alloc.free(direct);
+    for (args, 0..) |arg, i| {
+        direct[i] = try alloc.dupeZ(u8, arg);
+    }
+    return .{ .command = .{ .direct = direct } };
 }
 
 pub fn newSplit(self: *Window, existing: *Surface, dir: apprt.action.SplitDirection) !void {
@@ -1327,20 +2000,121 @@ fn containsLeaf(node: *SplitTree.Node, target: *Surface) bool {
 }
 
 pub fn handleTopLevelMessage(self: *Window, msg: UINT, wparam: WPARAM, lparam: LPARAM) ?LRESULT {
-    _ = wparam;
     switch (msg) {
-        WM_NOTIFY => {
-            const hdr: *const NMHDR = @ptrFromInt(@as(usize, @bitCast(lparam)));
-            if (self.tab_hwnd != null and hdr.hwndFrom == self.tab_hwnd.? and hdr.code == TCN_SELCHANGE) {
-                const sel = sys.SendMessageW(self.tab_hwnd.?, TCM_GETCURSEL, 0, 0);
-                const idx: usize = @intCast(sel);
-                self.activateTab(idx) catch {};
-                return 0;
+        sys.WM_NCCALCSIZE => return 0,
+        sys.WM_NCHITTEST => return self.hitTestTopLevel(lparam),
+        sys.WM_APP_CLOSE_TAB => {
+            self.closeTabAt(wparam);
+            return 0;
+        },
+        sys.WM_APP_NEW_TAB => {
+            self.newTab(.none) catch {};
+            return 0;
+        },
+        sys.WM_APP_NEW_PROFILE_TAB => {
+            self.newProfileTab(@enumFromInt(@as(u16, @intCast(wparam)))) catch {};
+            return 0;
+        },
+        WM_PAINT => {
+            self.paintTopBar(self.hwnd orelse return 0);
+            return 0;
+        },
+        sys.WM_NCLBUTTONUP => {
+            switch (@as(LRESULT, @intCast(wparam))) {
+                sys.HTMINBUTTON => {
+                    self.minimize();
+                    return 0;
+                },
+                sys.HTMAXBUTTON => {
+                    self.toggleMaximize();
+                    return 0;
+                },
+                else => {},
             }
+        },
+        WM_LBUTTONDOWN => {
+            return 0;
         },
         else => {},
     }
     return null;
+}
+
+pub fn hitTestTopLevel(self: *Window, lparam: LPARAM) LRESULT {
+    return self.hitTestPoint(signExtendLowWord(lparam), signExtendHighWord(lparam));
+}
+
+pub fn isResizeHit(_: *Window, hit: LRESULT) bool {
+    return switch (hit) {
+        sys.HTLEFT,
+        sys.HTRIGHT,
+        sys.HTTOP,
+        sys.HTTOPLEFT,
+        sys.HTTOPRIGHT,
+        sys.HTBOTTOM,
+        sys.HTBOTTOMLEFT,
+        sys.HTBOTTOMRIGHT,
+        => true,
+        else => false,
+    };
+}
+
+pub fn hitTestPoint(self: *Window, x: i32, y: i32) LRESULT {
+    const hwnd = self.hwnd orelse return sys.HTCLIENT;
+
+    var rect: RECT = std.mem.zeroes(RECT);
+    if (sys.GetWindowRect(hwnd, &rect) == 0) return sys.HTCLIENT;
+
+    const frame_x = sys.GetSystemMetrics(sys.SM_CXFRAME) + sys.GetSystemMetrics(sys.SM_CXPADDEDBORDER);
+    const frame_y = sys.GetSystemMetrics(sys.SM_CYFRAME) + sys.GetSystemMetrics(sys.SM_CXPADDEDBORDER);
+    const border_x = @max(frame_x, 8);
+    const border_y = @max(frame_y, 8);
+
+    if (!self.fullscreen.active and sys.IsZoomed(hwnd) == 0) {
+        const left = x >= rect.left and x < rect.left + border_x;
+        const right = x < rect.right and x >= rect.right - border_x;
+        const top = y >= rect.top and y < rect.top + border_y;
+        const bottom = y < rect.bottom and y >= rect.bottom - border_y;
+
+        if (top and left) return sys.HTTOPLEFT;
+        if (top and right) return sys.HTTOPRIGHT;
+        if (bottom and left) return sys.HTBOTTOMLEFT;
+        if (bottom and right) return sys.HTBOTTOMRIGHT;
+        if (top) return sys.HTTOP;
+        if (bottom) return sys.HTBOTTOM;
+        if (left) return sys.HTLEFT;
+        if (right) return sys.HTRIGHT;
+    }
+
+    if (y < rect.top + self.tabClientHeight()) {
+        const button_area_left = rect.right - WINDOW_BUTTON_WIDTH * WINDOW_BUTTON_COUNT;
+        if (x >= button_area_left and y < rect.top + TITLE_BUTTON_HIT_HEIGHT) {
+            const idx = @divTrunc(x - button_area_left, WINDOW_BUTTON_WIDTH);
+            return switch (idx) {
+                0 => sys.HTMINBUTTON,
+                1 => sys.HTMAXBUTTON,
+                else => sys.HTCLIENT,
+            };
+        }
+        return sys.HTCAPTION;
+    }
+    return sys.HTCLIENT;
+}
+
+fn lparamX(value: LPARAM) i32 {
+    return signExtendLowWord(value);
+}
+
+fn lparamY(value: LPARAM) i32 {
+    return signExtendHighWord(value);
+}
+
+fn signExtendLowWord(value: LPARAM) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(value))))));
+}
+
+fn signExtendHighWord(value: LPARAM) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(value)) >> 16))));
 }
 
 pub fn toggleFullscreen(self: *Window) void {

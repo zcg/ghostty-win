@@ -38,7 +38,6 @@ const WM_CLOSE = sys.WM_CLOSE;
 const WM_SIZE = sys.WM_SIZE;
 const WM_PAINT = sys.WM_PAINT;
 const WM_ERASEBKGND = sys.WM_ERASEBKGND;
-const WM_DRAWITEM: UINT = 0x002B;
 const WM_KEYDOWN = sys.WM_KEYDOWN;
 const WM_CHAR = sys.WM_CHAR;
 const WM_UNICHAR: UINT = 0x0109;
@@ -59,6 +58,7 @@ extern "user32" fn IsWindowVisible(hWnd: HWND) callconv(.winapi) BOOL;
 extern "user32" fn SetLayeredWindowAttributes(hWnd: HWND, crKey: u32, bAlpha: u8, dwFlags: u32) callconv(.winapi) BOOL;
 extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
 extern "user32" fn FlashWindowEx(pfwi: *FLASHWINFO) callconv(.winapi) BOOL;
+extern "user32" fn ClientToScreen(hWnd: HWND, lpPoint: *sys.POINT) callconv(.winapi) BOOL;
 const WS_EX_LAYERED: u32 = 0x00080000;
 
 const FLASHWINFO = extern struct {
@@ -299,7 +299,8 @@ pub fn init(
 
     // Single-instance check: if another Ghostty is already running,
     // signal it to open a new window and exit this process.
-    const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Global\\GhosttyWin32Mutex");
+    const mutex_name = try singleInstanceMutexName(alloc);
+    defer alloc.free(mutex_name);
     self.instance_mutex = sys.CreateMutexW(null, 0, mutex_name);
     if (sys.GetLastError() == sys.ERROR_ALREADY_EXISTS) {
         // Another instance owns the mutex. Find its window and request a new one.
@@ -317,6 +318,15 @@ pub fn init(
     const window = try Window.create(alloc, self, .none);
     try self.windows.append(alloc, window);
     self.focused_window = window;
+}
+
+fn singleInstanceMutexName(alloc: Allocator) ![:0]const u16 {
+    var exe_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe_path = try std.fs.selfExePath(&exe_path_buf);
+    const hash = std.hash.Wyhash.hash(0, exe_path);
+    const name_utf8 = try std.fmt.allocPrint(alloc, "Global\\GhosttyWin32Mutex-{x}", .{hash});
+    defer alloc.free(name_utf8);
+    return try std.unicode.utf8ToUtf16LeAllocZ(alloc, name_utf8);
 }
 
 pub fn run(self: *App) !void {
@@ -876,7 +886,7 @@ pub fn performAction(
         },
         .toggle_tab_overview => {
             const window = self.focused_window orelse return false;
-            if (window.tab_hwnd) |hwnd| _ = sys.SetFocus(hwnd);
+            if (window.hwnd) |hwnd| _ = sys.SetFocus(hwnd);
             return true;
         },
         .toggle_quick_terminal => {
@@ -1340,12 +1350,14 @@ pub fn wndProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.
             if (getWindow(hwnd)) |window| {
                 if (window.surface_initialized and window.tree != null) {
                     window.relayout();
+                } else {
+                    var rect: sys.RECT = std.mem.zeroes(sys.RECT);
+                    if (sys.GetClientRect(hwnd, &rect) != 0) {
+                        rect.bottom = @min(rect.bottom, 40);
+                        _ = sys.InvalidateRect(hwnd, &rect, 0);
+                    }
                 }
             }
-            return 0;
-        },
-        WM_DRAWITEM => {
-            if (getWindow(hwnd)) |window| return window.handleDrawItem(lparam);
             return 0;
         },
         0x001A => { // WM_SETTINGCHANGE
@@ -1402,6 +1414,10 @@ fn applyWindowEffects(self: *App) void {
 pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) LRESULT {
     switch (msg) {
         WM_ERASEBKGND => return 1,
+        sys.WM_NCHITTEST => {
+            if (surface.window) |window| return window.hitTestTopLevel(lparam);
+            return sys.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
         WM_PAINT => {
             var ps: PAINTSTRUCT = std.mem.zeroes(PAINTSTRUCT);
             _ = sys.BeginPaint(hwnd, &ps);
@@ -1492,6 +1508,22 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
         },
         0x0201, 0x0204, 0x0207 => {
             if (surface.core_surface) |core| {
+                if (msg == 0x0201) {
+                    if (surface.window) |window| {
+                        var pt: sys.POINT = .{
+                            .x = @as(i16, @truncate(lparam & 0xFFFF)),
+                            .y = @as(i16, @truncate((lparam >> 16) & 0xFFFF)),
+                        };
+                        if (ClientToScreen(hwnd, &pt) != 0) {
+                            const hit = window.hitTestPoint(pt.x, pt.y);
+                            if (window.isResizeHit(hit)) {
+                                _ = ReleaseCapture();
+                                _ = sys.SendMessageW(window.hwnd orelse hwnd, sys.WM_NCLBUTTONDOWN, @intCast(hit), packMousePoint(pt.x, pt.y));
+                                return 0;
+                            }
+                        }
+                    }
+                }
                 surface.cursor_pos = .{
                     .x = @floatFromInt(@as(i16, @truncate(lparam & 0xFFFF))),
                     .y = @floatFromInt(@as(i16, @truncate((lparam >> 16) & 0xFFFF))),
@@ -1589,4 +1621,11 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
         },
         else => return sys.DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+fn packMousePoint(x: i32, y: i32) LPARAM {
+    const lo: u16 = @bitCast(@as(i16, @truncate(x)));
+    const hi: u16 = @bitCast(@as(i16, @truncate(y)));
+    const value: u32 = @as(u32, lo) | (@as(u32, hi) << 16);
+    return @bitCast(@as(usize, value));
 }
