@@ -598,12 +598,15 @@ pub const Face = struct {
             log.warn("directwrite bgra glyph render d2d failed glyph={}, falling back to monochrome outline", .{glyph_index});
         }
 
+        const text_rendering_mode: dw.DWRITE_RENDERING_MODE = .natural_symmetric;
+        const text_texture_type: dw.DWRITE_TEXTURE_TYPE = .cleartype_3x1;
+
         var analysis: *dw.IDWriteGlyphRunAnalysis = undefined;
         const hr2 = factory.createGlyphRunAnalysis(
             &glyph_run,
             @as(f32, @floatFromInt(self.size.xdpi)) / 96.0, // pixels_per_dip
             null,
-            .aliased,
+            text_rendering_mode,
             .natural,
             0.0, // baseline_origin_x
             0.0, // baseline_origin_y: origin at baseline
@@ -614,7 +617,7 @@ pub const Face = struct {
 
         // Get precise alpha texture bounds
         var bounds: dw.RECT = undefined;
-        const hr3 = analysis.getAlphaTextureBounds(.aliased, &bounds);
+        const hr3 = analysis.getAlphaTextureBounds(text_texture_type, &bounds);
         if (hr3 != dw.S_OK) return error.GlyphBoundsFailed;
 
         const tex_width = bounds.width();
@@ -631,18 +634,31 @@ pub const Face = struct {
             };
         }
 
-        // Create alpha texture data
-        const buf_size = @as(dw.UINT32, @intCast(tex_width * tex_height));
-        const alpha_buf = try alloc.alloc(u8, buf_size);
-        defer alloc.free(alpha_buf);
+        // DirectWrite exposes antialiased outlines through the ClearType 3x1
+        // texture path. Collapse the three channel coverages into grayscale
+        // alpha because Ghostty's text atlas is single-channel.
+        const pixel_count = @as(usize, @intCast(tex_width)) * @as(usize, @intCast(tex_height));
+        const cleartype_buf_size = pixel_count * 3;
+        const cleartype_buf = try alloc.alloc(u8, cleartype_buf_size);
+        defer alloc.free(cleartype_buf);
 
         const hr4 = analysis.createAlphaTexture(
-            .aliased,
+            text_texture_type,
             &bounds,
-            alpha_buf.ptr,
-            buf_size,
+            cleartype_buf.ptr,
+            @intCast(cleartype_buf.len),
         );
         if (hr4 != dw.S_OK) return error.GlyphTextureFailed;
+
+        const alpha_buf = try alloc.alloc(u8, pixel_count);
+        defer alloc.free(alpha_buf);
+        for (alpha_buf, 0..) |*dst, i| {
+            const src = i * 3;
+            const r: u16 = cleartype_buf[src + 0];
+            const g: u16 = cleartype_buf[src + 1];
+            const b: u16 = cleartype_buf[src + 2];
+            dst.* = @intCast(@divTrunc(r + g + b + 1, 3));
+        }
 
         // Reserve space in atlas
         const reg = try atlas.reserve(alloc, @intCast(tex_width), @intCast(tex_height));
