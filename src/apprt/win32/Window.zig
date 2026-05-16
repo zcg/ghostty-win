@@ -9,6 +9,7 @@ const configpkg = @import("../../config.zig");
 const CoreSurface = @import("../../Surface.zig");
 const Surface = @import("Surface.zig");
 const SplitTree = @import("SplitTree.zig");
+const build_config = @import("../../build_config.zig");
 const sys = @import("sys.zig");
 
 const App = @import("App.zig");
@@ -51,6 +52,7 @@ const TCN_SELCHANGE: i32 = TCN_FIRST - 1;
 const ICC_TAB_CLASSES: DWORD = 0x00000008;
 const TAB_HEIGHT: i32 = 30;
 const DIVIDER_THICKNESS: i32 = 10;
+const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x00200000;
 const IDC_SIZEWE = @as(?[*:0]align(1) const u16, @ptrFromInt(32644));
 const IDC_SIZENS = @as(?[*:0]align(1) const u16, @ptrFromInt(32645));
 
@@ -222,8 +224,12 @@ fn createHwnd(self: *Window, title_override: ?[:0]const u8) !void {
         null;
     defer if (title) |v| self.app.alloc.free(v);
 
+    const ex_style: DWORD =
+        (if (self.quick_terminal) @as(DWORD, @intCast(sys.WS_EX_TOPMOST)) else 0) |
+        (if (build_config.renderer == .d3d11) WS_EX_NOREDIRECTIONBITMAP else 0);
+
     self.hwnd = sys.CreateWindowExW(
-        if (self.quick_terminal) @intCast(sys.WS_EX_TOPMOST) else 0,
+        ex_style,
         class_name,
         if (title) |v| v.ptr else std.unicode.utf8ToUtf16LeStringLiteral("Ghostty"),
         if (self.quick_terminal) sys.WS_OVERLAPPEDWINDOW & ~sys.WS_CAPTION_BIT else sys.WS_OVERLAPPEDWINDOW,
