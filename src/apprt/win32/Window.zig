@@ -24,6 +24,13 @@ const WPARAM = sys.WPARAM;
 const LRESULT = sys.LRESULT;
 const HDC = ?*anyopaque;
 
+const ClientInset = struct {
+    left: i32 = 0,
+    top: i32 = 0,
+    right: i32 = 0,
+    bottom: i32 = 0,
+};
+
 const WS_CHILD: u32 = 0x40000000;
 const WS_VISIBLE: u32 = 0x10000000;
 const WM_PAINT: UINT = 0x000F;
@@ -1730,25 +1737,42 @@ pub fn relayout(self: *Window) void {
     if (sys.GetClientRect(hwnd, &rect) == 0) return;
     self.invalidateTopBar();
     const tab_h = self.tabClientHeight();
+    const inset = self.visibleClientInset();
+    const client_w = rect.right - rect.left;
+    const client_h = rect.bottom - rect.top;
+    const visible_w = @max(1, client_w - inset.left - inset.right);
+    const visible_h = @max(tab_h + 1, client_h - inset.top - inset.bottom);
     if (self.title_bar) |bar| {
         _ = sys.SetWindowPos(
             bar.hwnd,
             HWND_TOP,
-            0,
-            0,
-            rect.right - rect.left,
+            inset.left,
+            inset.top,
+            visible_w,
             tab_h,
             SWP_NOACTIVATE,
         );
     }
     const bounds = SplitTree.Rect{
-        .x = 0,
-        .y = tab_h,
-        .w = rect.right - rect.left,
-        .h = rect.bottom - rect.top - tab_h,
+        .x = inset.left,
+        .y = inset.top + tab_h,
+        .w = visible_w,
+        .h = @max(1, visible_h - tab_h),
     };
     tree.layout(bounds, relayoutCb);
     self.updateDividers(bounds);
+}
+
+fn visibleClientInset(self: *Window) ClientInset {
+    const hwnd = self.hwnd orelse return .{};
+    if (self.fullscreen.active or sys.IsZoomed(hwnd) == 0) return .{};
+
+    return .{
+        .left = resizeBorderX(),
+        .top = resizeBorderY(),
+        .right = resizeBorderX(),
+        .bottom = resizeBorderY(),
+    };
 }
 
 fn relayoutCb(surface: *Surface, rect: SplitTree.Rect) void {
@@ -2065,10 +2089,8 @@ pub fn hitTestPoint(self: *Window, x: i32, y: i32) LRESULT {
     var rect: RECT = std.mem.zeroes(RECT);
     if (sys.GetWindowRect(hwnd, &rect) == 0) return sys.HTCLIENT;
 
-    const frame_x = sys.GetSystemMetrics(sys.SM_CXFRAME) + sys.GetSystemMetrics(sys.SM_CXPADDEDBORDER);
-    const frame_y = sys.GetSystemMetrics(sys.SM_CYFRAME) + sys.GetSystemMetrics(sys.SM_CXPADDEDBORDER);
-    const border_x = @max(frame_x, 8);
-    const border_y = @max(frame_y, 8);
+    const border_x = resizeBorderX();
+    const border_y = resizeBorderY();
 
     if (!self.fullscreen.active and sys.IsZoomed(hwnd) == 0) {
         const left = x >= rect.left and x < rect.left + border_x;
@@ -2099,6 +2121,14 @@ pub fn hitTestPoint(self: *Window, x: i32, y: i32) LRESULT {
         return sys.HTCAPTION;
     }
     return sys.HTCLIENT;
+}
+
+fn resizeBorderX() i32 {
+    return @max(sys.GetSystemMetrics(sys.SM_CXFRAME) + sys.GetSystemMetrics(sys.SM_CXPADDEDBORDER), 8);
+}
+
+fn resizeBorderY() i32 {
+    return @max(sys.GetSystemMetrics(sys.SM_CYFRAME) + sys.GetSystemMetrics(sys.SM_CXPADDEDBORDER), 8);
 }
 
 fn lparamX(value: LPARAM) i32 {
