@@ -81,6 +81,7 @@ const IDC_SIZENS = @as(?[*:0]align(1) const u16, @ptrFromInt(32645));
 
 const HWND_TOP: ?HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, 0))));
 const SWP_NOACTIVATE: UINT = 0x0010;
+const SWP_NOCOPYBITS: UINT = 0x0100;
 
 extern "gdi32" fn CreateSolidBrush(color: u32) callconv(.winapi) ?*anyopaque;
 extern "gdi32" fn DeleteObject(ho: ?*anyopaque) callconv(.winapi) BOOL;
@@ -185,7 +186,10 @@ const TitleBarState = struct {
                 _ = sys.InvalidateRect(hwnd, null, 0);
                 if (!self.activatePressedOnMouseUp(hit)) {
                     self.pressed = .none;
-                    _ = sys.PostMessageW(self.window.hwnd.?, sys.WM_NCLBUTTONDOWN, @intCast(sys.HTCAPTION), 0);
+                    var pt: sys.POINT = .{ .x = lparamX(lparam), .y = lparamY(lparam) };
+                    _ = sys.ClientToScreen(hwnd, &pt);
+                    const l = @as(LPARAM, @intCast(@as(u32, @bitCast(pt.x)) | (@as(u32, @bitCast(pt.y)) << 16)));
+                    _ = sys.PostMessageW(self.window.hwnd.?, sys.WM_NCLBUTTONDOWN, @intCast(sys.HTCAPTION), l);
                 }
                 return 0;
             },
@@ -1420,7 +1424,7 @@ fn updateDividers(self: *Window, bounds: SplitTree.Rect) void {
             info.rect.y,
             info.rect.w,
             info.rect.h,
-            0x0004,
+            0x0004 | SWP_NOCOPYBITS,
         );
         _ = sys.ShowWindow(divider.hwnd, sys.SW_SHOWNORMAL);
         _ = sys.InvalidateRect(divider.hwnd, null, 1);
@@ -2034,7 +2038,7 @@ pub fn relayout(self: *Window) void {
             inset.top,
             visible_w,
             tab_h,
-            SWP_NOACTIVATE,
+            SWP_NOACTIVATE | SWP_NOCOPYBITS | 0x0020,
         );
     }
     const bounds = SplitTree.Rect{
@@ -2052,20 +2056,21 @@ pub fn beginWindowResize(self: *Window) void {
     self.pending_core_resize = false;
     self.pending_window_relayout = false;
     self.hideVisibleScrollbars();
+    self.invalidateTopBar();
 }
 
 pub fn endWindowResize(self: *Window) void {
     self.in_window_resize = false;
-    if (self.pending_window_relayout) {
-        self.pending_window_relayout = false;
-        self.relayout();
-    }
+    self.pending_window_relayout = false;
+    self.relayout();
     if (self.pending_core_resize) {
         self.pending_core_resize = false;
         self.commitVisibleSurfaceSizes();
     }
     self.refreshVisibleScrollbars();
     self.forceFullRedraw();
+    // Force title bar to repaint with correct size after resize sequence.
+    if (self.title_bar) |bar| _ = sys.UpdateWindow(bar.hwnd);
 }
 
 pub fn deferCoreResize(self: *Window) bool {
@@ -2078,6 +2083,38 @@ pub fn deferWindowRelayout(self: *Window) bool {
     if (!self.in_window_resize) return false;
     self.pending_window_relayout = true;
     return true;
+}
+
+pub fn updateTitleBarLayout(self: *Window) void {
+    const bar = self.title_bar orelse return;
+    const hwnd = self.hwnd orelse return;
+    var rect: RECT = std.mem.zeroes(RECT);
+    if (sys.GetClientRect(hwnd, &rect) == 0) return;
+    const inset = self.visibleClientInset();
+    const client_w = rect.right - rect.left;
+    const client_h = rect.bottom - rect.top;
+    const tab_h = self.tabClientHeight();
+    const visible_w = @max(1, client_w - inset.left - inset.right);
+    const visible_h = @max(tab_h + 1, client_h - inset.top - inset.bottom);
+    _ = sys.SetWindowPos(
+        bar.hwnd,
+        HWND_TOP,
+        inset.left,
+        inset.top,
+        visible_w,
+        tab_h,
+        SWP_NOACTIVATE | SWP_NOCOPYBITS,
+    );
+    if (self.tree) |*tree| {
+        const bounds = SplitTree.Rect{
+            .x = inset.left,
+            .y = inset.top + tab_h,
+            .w = visible_w,
+            .h = @max(1, visible_h - tab_h),
+        };
+        tree.layout(bounds, relayoutCb);
+        self.updateDividers(bounds);
+    }
 }
 
 fn commitVisibleSurfaceSizes(self: *Window) void {
@@ -2131,7 +2168,7 @@ fn visibleClientInset(self: *Window) ClientInset {
 
 fn relayoutCb(surface: *Surface, rect: SplitTree.Rect) void {
     surface.setLayoutRect(rect.x, rect.y, rect.w, rect.h);
-    _ = sys.SetWindowPos(surface.hwnd, null, rect.x, rect.y, rect.w, rect.h, 0x0004);
+    _ = sys.SetWindowPos(surface.hwnd, null, rect.x, rect.y, rect.w, rect.h, 0x0004 | SWP_NOCOPYBITS);
 }
 
 pub fn newTab(self: *Window, opts: CreateOptions) !void {

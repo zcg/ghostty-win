@@ -1366,7 +1366,10 @@ pub fn wndProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.
         WM_SIZE => {
             if (getWindow(hwnd)) |window| {
                 if (window.surface_initialized and window.tree != null) {
-                    if (window.deferWindowRelayout()) return 0;
+                    if (window.deferWindowRelayout()) {
+                        window.updateTitleBarLayout();
+                        return 0;
+                    }
                     window.relayout();
                 } else {
                     var rect: sys.RECT = std.mem.zeroes(sys.RECT);
