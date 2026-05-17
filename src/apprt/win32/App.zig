@@ -491,11 +491,20 @@ pub fn performAction(
             return true;
         },
         .set_title => {
-            const window = self.focused_window orelse return false;
-            if (window.hwnd) |hwnd| {
-                const utf16 = std.unicode.utf8ToUtf16LeAllocZ(self.alloc, value.title) catch return false;
-                defer self.alloc.free(utf16);
-                _ = sys.SetWindowTextW(hwnd, utf16.ptr);
+            const core = switch (target) {
+                .app => return false,
+                .surface => |core| core,
+            };
+            const rt_surface = core.rt_surface;
+            if (rt_surface.window) |window| {
+                if (window.hwnd) |hwnd| {
+                    const utf16 = std.unicode.utf8ToUtf16LeAllocZ(self.alloc, value.title) catch return false;
+                    defer self.alloc.free(utf16);
+                    _ = sys.SetWindowTextW(hwnd, utf16.ptr);
+                }
+                if (window.findTabIndexForSurface(rt_surface)) |tab_idx| {
+                    window.setTabTitle(tab_idx, value.title) catch return false;
+                }
             }
             return true;
         },

@@ -36,6 +36,7 @@ const WS_VISIBLE: u32 = 0x10000000;
 const WM_PAINT: UINT = 0x000F;
 const WM_LBUTTONDOWN: UINT = 0x0201;
 const WM_LBUTTONUP: UINT = 0x0202;
+const WM_RBUTTONDOWN: UINT = 0x0204;
 const WM_MOUSEMOVE: UINT = 0x0200;
 const WM_CAPTURECHANGED: UINT = 0x0215;
 const WM_SETCURSOR: UINT = 0x0020;
@@ -56,6 +57,18 @@ const TAB_TOP: i32 = 8;
 const TAB_BOTTOM: i32 = 45;
 const TAB_GAP: i32 = 1;
 const TAB_CLOSE_WIDTH: i32 = 34;
+const MIN_TAB_WIDTH: i32 = 100;
+const TAB_TEXT_MARGIN_LEFT: i32 = 16;
+const TAB_TEXT_MARGIN_RIGHT: i32 = 8;
+const COMPACT_WIDTH: i32 = 90;
+const TITLE_MIN_WIDTH: i32 = 100;
+const TITLE_MAX_WIDTH: i32 = 350;
+
+const TabWidthMode = enum {
+    equal,
+    compact,
+    title,
+};
 const TAB_ACTION_TOP: i32 = 7;
 const TITLE_ICON_SIZE: f32 = 12.0;
 const TITLE_BUTTON_HIT_HEIGHT: i32 = TOP_BAR_HEIGHT;
@@ -184,6 +197,14 @@ const TitleBarState = struct {
                 _ = sys.InvalidateRect(hwnd, null, 0);
                 return 0;
             },
+            WM_RBUTTONDOWN => {
+                const hit = self.hitTestClient(lparamX(lparam), lparamY(lparam));
+                switch (hit) {
+                    .tab => |idx| self.showTabContextMenu(idx, lparamX(lparam), lparamY(lparam)),
+                    else => {},
+                }
+                return 0;
+            },
             WM_MOUSEMOVE => {
                 const hit = self.hitTestClient(lparamX(lparam), lparamY(lparam));
                 if (!self.hover.eql(hit)) {
@@ -290,12 +311,27 @@ const TitleBarState = struct {
             };
         }
 
-        var tab_x: i32 = TAB_START_X;
+        const tab_count = window.tabs.items.len;
         const controls_right = button_area_left;
-        for (window.tabs.items, 0..) |_, i| {
-            const max_right = controls_right - NEW_TAB_WIDTH - DROPDOWN_WIDTH - 12;
+        const max_right = controls_right - NEW_TAB_WIDTH - DROPDOWN_WIDTH - 12;
+        const available_width = max_right - TAB_START_X;
+        const tw = tabWidth(tab_count, available_width);
+        const format = self.tab_text_format orelse return .none;
+        const factory = self.dwrite_factory orelse return .none;
+        const mode = window.tab_width_mode;
+
+        var tab_x: i32 = TAB_START_X;
+        for (window.tabs.items, 0..) |tab, i| {
             if (tab_x >= max_right) break;
-            const width = @min(CUSTOM_TAB_WIDTH, max_right - tab_x);
+            const width = switch (mode) {
+                .equal => @min(tw, max_right - tab_x),
+                .compact => @min(COMPACT_WIDTH, max_right - tab_x),
+                .title => blk: {
+                    const text_w = measureTabTextWidth(factory, format, tab.title, window.app.alloc);
+                    const desired = text_w + TAB_TEXT_MARGIN_LEFT + TAB_CLOSE_WIDTH + TAB_TEXT_MARGIN_RIGHT;
+                    break :blk @min(@max(TITLE_MIN_WIDTH, desired), TITLE_MAX_WIDTH, max_right - tab_x);
+                },
+            };
             if (x >= tab_x and x < tab_x + width) {
                 if (x >= tab_x + width - TAB_CLOSE_WIDTH) return .{ .tab_close = i };
                 return .{ .tab = i };
@@ -320,6 +356,60 @@ const TitleBarState = struct {
             .new_tab => _ = sys.PostMessageW(hwnd, sys.WM_APP_NEW_TAB, 0, 0),
             .dropdown => window.showNewTabMenuFromTitleBar(),
             .drag, .none => {},
+        }
+    }
+
+    fn showTabContextMenu(self: *TitleBarState, tab_index: usize, client_x: i32, client_y: i32) void {
+        const menu = sys.CreatePopupMenu() orelse return;
+        defer _ = sys.DestroyMenu(menu);
+
+        const rename_label = std.unicode.utf8ToUtf16LeStringLiteral("Rename");
+        const close_label = std.unicode.utf8ToUtf16LeStringLiteral("Close Tab");
+        const sep_label = std.unicode.utf8ToUtf16LeStringLiteral("");
+        const none_label = std.unicode.utf8ToUtf16LeStringLiteral("No Color");
+        const red_label = std.unicode.utf8ToUtf16LeStringLiteral("Red");
+        const green_label = std.unicode.utf8ToUtf16LeStringLiteral("Green");
+        const blue_label = std.unicode.utf8ToUtf16LeStringLiteral("Blue");
+        const yellow_label = std.unicode.utf8ToUtf16LeStringLiteral("Yellow");
+        const purple_label = std.unicode.utf8ToUtf16LeStringLiteral("Purple");
+        const orange_label = std.unicode.utf8ToUtf16LeStringLiteral("Orange");
+
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 1, rename_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 2, close_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_SEPARATOR, 0, sep_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 10, none_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 11, red_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 12, green_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 13, blue_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 14, yellow_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 15, purple_label.ptr);
+        _ = sys.AppendMenuW(menu, sys.MF_STRING, 16, orange_label.ptr);
+
+        var pt: sys.POINT = .{ .x = client_x, .y = client_y };
+        _ = sys.ClientToScreen(self.hwnd, &pt);
+
+        const cmd = sys.TrackPopupMenu(menu, sys.TPM_RETURNCMD | sys.TPM_LEFTALIGN | sys.TPM_TOPALIGN, pt.x, pt.y, 0, self.hwnd, null);
+        const window = self.window;
+        if (window.tabs.items.len <= tab_index) return;
+        switch (cmd) {
+            1 => {
+                window.activateTab(tab_index) catch {};
+                const core = window.tabs.items[tab_index].primary_surface.core_surface orelse return;
+                _ = window.app.performAction(.{ .surface = core }, .prompt_title, .tab) catch {};
+            },
+            2 => {
+                if (window.hwnd) |hwnd| {
+                    _ = sys.PostMessageW(hwnd, sys.WM_APP_CLOSE_TAB, tab_index, 0);
+                }
+            },
+            10 => window.setTabColor(tab_index, null),
+            11 => window.setTabColor(tab_index, .{ .r = 255, .g = 80, .b = 80 }),
+            12 => window.setTabColor(tab_index, .{ .r = 80, .g = 200, .b = 80 }),
+            13 => window.setTabColor(tab_index, .{ .r = 80, .g = 130, .b = 255 }),
+            14 => window.setTabColor(tab_index, .{ .r = 230, .g = 200, .b = 80 }),
+            15 => window.setTabColor(tab_index, .{ .r = 180, .g = 100, .b = 220 }),
+            16 => window.setTabColor(tab_index, .{ .r = 230, .g = 140, .b = 60 }),
+            else => {},
         }
     }
 
@@ -426,23 +516,65 @@ const TitleBarState = struct {
         controls_right: i32,
     ) !void {
         const window = self.window;
+        const tab_count = window.tabs.items.len;
+        if (tab_count == 0) return;
+
+        const max_right = controls_right - NEW_TAB_WIDTH - DROPDOWN_WIDTH - 12;
+        const available_width = max_right - TAB_START_X;
+        const tw = tabWidth(tab_count, available_width);
+        const factory = self.dwrite_factory orelse return;
+        const mode = window.tab_width_mode;
+
         var x: i32 = TAB_START_X;
         for (window.tabs.items, 0..) |tab, i| {
-            const max_right = controls_right - NEW_TAB_WIDTH - DROPDOWN_WIDTH - 12;
             if (x >= max_right) break;
-            const width = @min(CUSTOM_TAB_WIDTH, max_right - x);
+
+            const width = switch (mode) {
+                .equal => @min(tw, max_right - x),
+                .compact => @min(COMPACT_WIDTH, max_right - x),
+                .title => blk: {
+                    const text_w = measureTabTextWidth(factory, format, tab.title, window.app.alloc);
+                    const desired = text_w + TAB_TEXT_MARGIN_LEFT + TAB_CLOSE_WIDTH + TAB_TEXT_MARGIN_RIGHT;
+                    break :blk @min(@max(TITLE_MIN_WIDTH, desired), TITLE_MAX_WIDTH, max_right - x);
+                },
+            };
+
             const selected = i == window.current_tab;
-            const bg = if (selected)
-                blendColor(window.app.config.background, window.app.config.foreground, 0.26)
+            const bg: configpkg.Config.Color = if (tab.color) |c|
+                if (selected) c else blendColor(c, window.app.config.foreground, 0.10)
             else
-                blendColor(window.app.config.background, window.app.config.foreground, 0.08);
-            const brush = try d2dBrush(target, d2dColor(bg, if (selected) 0.76 else 0.34));
+                if (selected)
+                    blendColor(window.app.config.background, window.app.config.foreground, 0.26)
+                else
+                    blendColor(window.app.config.background, window.app.config.foreground, 0.08);
+            const bg_alpha: f32 = if (tab.color != null)
+                if (selected) 0.85 else 0.50
+            else
+                if (selected) 0.76 else 0.34;
+            const brush = try d2dBrush(target, d2dColor(bg, bg_alpha));
             defer releaseCom(brush);
             var tab_rect = rectF(x, TAB_TOP, x + width, TAB_BOTTOM);
             target.FillRectangle(&tab_rect, @ptrCast(brush));
 
-            var text_rect = rectF(x + 16, TAB_TOP, x + width - TAB_CLOSE_WIDTH - 8, TAB_BOTTOM);
-            const utf16 = try std.unicode.utf8ToUtf16LeAllocZ(window.app.alloc, tab.title);
+            var text_rect = rectF(x + TAB_TEXT_MARGIN_LEFT, TAB_TOP, x + width - TAB_CLOSE_WIDTH - TAB_TEXT_MARGIN_RIGHT, TAB_BOTTOM);
+
+            const title_to_draw = switch (mode) {
+                .equal, .title => blk_title: {
+                    if (mode == .title) {
+                        const text_avail = width - TAB_TEXT_MARGIN_LEFT - TAB_CLOSE_WIDTH - TAB_TEXT_MARGIN_RIGHT;
+                        const text_w = measureTabTextWidth(factory, format, tab.title, window.app.alloc);
+                        if (text_w > text_avail) {
+                            break :blk_title try truncateTabTitle(window.app.alloc, tab.title, text_avail, text_w);
+                        }
+                    }
+                    break :blk_title tab.title;
+                },
+                .compact => try compactTitle(tab.title, window.app.alloc),
+            };
+            const needs_free = (mode == .title and title_to_draw.ptr != tab.title.ptr) or mode == .compact;
+            defer if (needs_free) window.app.alloc.free(title_to_draw);
+
+            const utf16 = try std.unicode.utf8ToUtf16LeAllocZ(window.app.alloc, title_to_draw);
             defer window.app.alloc.free(utf16);
             target.DrawText(utf16.ptr, @intCast(utf16.len), format, &text_rect, text_brush, .{ .CLIP = 1 });
 
@@ -619,6 +751,7 @@ const TabState = struct {
     tree: SplitTree,
     focused_surface: ?*Surface = null,
     title: [:0]const u8,
+    color: ?configpkg.Config.Color = null,
 };
 
 app: *App,
@@ -630,6 +763,7 @@ focused_surface: ?*Surface = null,
 surface_initialized: bool = false,
 tabs: std.ArrayListUnmanaged(TabState) = .{},
 current_tab: usize = 0,
+tab_width_mode: TabWidthMode = .equal,
 fullscreen: FullscreenState = .{},
 quick_terminal: bool = false,
 dividers: std.ArrayListUnmanaged(*DividerState) = .{},
@@ -1426,12 +1560,87 @@ pub fn setActiveTabTitle(self: *Window, title: [:0]const u8) !void {
     self.updateTabControlTitle(self.current_tab);
 }
 
+pub fn setTabTitle(self: *Window, tab_index: usize, title: [:0]const u8) !void {
+    if (tab_index >= self.tabs.items.len) return;
+    const tab = &self.tabs.items[tab_index];
+    self.app.alloc.free(tab.title);
+    tab.title = try self.app.alloc.dupeZ(u8, title);
+    self.updateTabControlTitle(tab_index);
+}
+
+pub fn setTabColor(self: *Window, tab_index: usize, color: ?configpkg.Config.Color) void {
+    if (tab_index >= self.tabs.items.len) return;
+    self.tabs.items[tab_index].color = color;
+    self.invalidateTopBar();
+}
+
 fn updateTabVisibility(self: *Window) void {
     self.invalidateTopBar();
 }
 
 fn tabClientHeight(_: *Window) i32 {
     return TOP_BAR_HEIGHT;
+}
+
+fn tabWidth(tab_count: usize, available_width: i32) i32 {
+    if (tab_count == 0) return CUSTOM_TAB_WIDTH;
+    const total_gap = @max(0, @as(i32, @intCast(tab_count)) - 1) * TAB_GAP;
+    const max_total_width = @as(i32, @intCast(tab_count)) * CUSTOM_TAB_WIDTH + total_gap;
+    if (max_total_width <= available_width) return CUSTOM_TAB_WIDTH;
+    const w = @divTrunc(available_width - total_gap, @as(i32, @intCast(tab_count)));
+    return @max(MIN_TAB_WIDTH, w);
+}
+
+fn measureTabTextWidth(
+    factory: *d2d.IDWriteFactory,
+    format: *d2d.IDWriteTextFormat,
+    title: [:0]const u8,
+    alloc: Allocator,
+) i32 {
+    const utf16 = std.unicode.utf8ToUtf16LeAllocZ(alloc, title) catch return 0;
+    defer alloc.free(utf16);
+
+    var layout: *d2d.IDWriteTextLayout = undefined;
+    const hr = factory.CreateTextLayout(
+        utf16.ptr,
+        @intCast(utf16.len),
+        format,
+        10000.0,
+        100.0,
+        &layout,
+    );
+    if (d2d.failed(hr)) return 0;
+    defer _ = layout.IUnknown.Release();
+
+    var metrics: d2d.DWRITE_TEXT_METRICS = undefined;
+    const hr2 = layout.GetMetrics(&metrics);
+    if (d2d.failed(hr2)) return 0;
+
+    return @intFromFloat(@ceil(metrics.widthIncludingTrailingWhitespace));
+}
+
+fn truncateTabTitle(
+    alloc: Allocator,
+    title: [:0]const u8,
+    max_width: i32,
+    text_width: i32,
+) Allocator.Error![:0]u8 {
+    if (text_width <= max_width or title.len <= 3) {
+        return alloc.dupeZ(u8, title);
+    }
+    const ratio = @as(f32, @floatFromInt(max_width - 15)) / @as(f32, @floatFromInt(text_width));
+    const keep = @max(1, @as(usize, @intFromFloat(@floor(@as(f32, @floatFromInt(title.len)) * ratio))));
+    const truncated = try std.fmt.allocPrint(alloc, "{s}...", .{title[0..keep]});
+    defer alloc.free(truncated);
+    return alloc.dupeZ(u8, truncated);
+}
+
+fn compactTitle(title: [:0]const u8, alloc: Allocator) Allocator.Error![:0]u8 {
+    const has_path_sep = std.mem.indexOfAny(u8, title, "/\\") != null;
+    const name = if (has_path_sep) std.fs.path.basename(title) else title;
+    const name_no_ext = if (std.mem.lastIndexOf(u8, name, ".")) |idx| name[0..idx] else name;
+    const first_word = if (std.mem.indexOf(u8, name_no_ext, " ")) |idx| name_no_ext[0..idx] else name_no_ext;
+    return try alloc.dupeZ(u8, first_word);
 }
 
 fn invalidateTopBar(self: *Window) void {
@@ -1488,7 +1697,7 @@ fn activateTab(self: *Window, index: usize) !void {
     if (self.focused_surface) |surface| _ = sys.SetFocus(surface.hwnd);
 }
 
-fn findTabIndexForSurface(self: *Window, surface: *Surface) ?usize {
+pub fn findTabIndexForSurface(self: *Window, surface: *Surface) ?usize {
     if (self.tabs.items.len == 0) return null;
     if (self.tree) |tree| {
         if (tree.findLeaf(surface) != null and self.current_tab < self.tabs.items.len) return self.current_tab;
