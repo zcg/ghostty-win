@@ -4524,6 +4524,16 @@ pub fn finalize(self: *Config) !void {
     // specific variable use sites for more details.
     const probable_cli = probableCliEnvironment();
 
+    // Split comma-separated font-family values so that both
+    //   font-family = "Consolas, Courier New, monospace"
+    // and
+    //   font-family = "Consolas"
+    //   font-family = "Courier New"
+    // work identically.
+    inline for (.{ "font-family", "font-family-bold", "font-family-italic", "font-family-bold-italic" }) |field| {
+        try splitCommaSeparatedFonts(&@field(self, field), alloc);
+    }
+
     // If we have a font-family set and don't set the others, default
     // the others to the font family. This way, if someone does
     // --font-family=foo, then we try to get the stylized versions of
@@ -6128,6 +6138,46 @@ pub const RepeatableString = struct {
         try std.testing.expectEqualSlices(u8, "a = A\na = B\n", buf.written());
     }
 };
+
+/// If any entry in the RepeatableString contains commas, split it into
+/// separate entries. This allows users to write:
+///   font-family = "Consolas, Courier New, monospace"
+/// as a shorthand for:
+///   font-family = "Consolas"
+///   font-family = "Courier New"
+///   font-family = "monospace"
+fn splitCommaSeparatedFonts(rs: *RepeatableString, alloc: Allocator) !void {
+    if (rs.list.items.len == 0) return;
+
+    var new_list: std.ArrayListUnmanaged([:0]const u8) = .empty;
+    errdefer {
+        for (new_list.items) |item| alloc.free(item);
+        new_list.deinit(alloc);
+    }
+
+    for (rs.list.items) |item| {
+        var any_comma = false;
+        var it = std.mem.splitScalar(u8, item, ',');
+        while (it.next()) |raw| {
+            const trimmed = std.mem.trim(u8, raw, " \t\"");
+            if (trimmed.len == 0) continue;
+            const copy = try alloc.dupeZ(u8, trimmed);
+            try new_list.append(alloc, copy);
+            any_comma = true;
+        }
+        if (!any_comma) {
+            // No commas: keep original value (trim quotes just in case)
+            const trimmed = std.mem.trim(u8, item, " \t\"");
+            const copy = try alloc.dupeZ(u8, trimmed);
+            try new_list.append(alloc, copy);
+        }
+    }
+
+    // Replace the old list with the new one
+    for (rs.list.items) |item| alloc.free(item);
+    rs.list.deinit(alloc);
+    rs.list = new_list;
+}
 
 /// SelectionWordChars stores the parsed codepoints for word boundary
 /// characters used during text selection. The string is parsed once

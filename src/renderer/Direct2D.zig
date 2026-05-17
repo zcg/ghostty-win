@@ -566,13 +566,17 @@ const FontChoice = struct {
 };
 
 fn fontChoice(self: *Direct2D) !FontChoice {
-    if (self.config.@"font-family".list.items.len > 0) {
-        const configured = self.config.@"font-family".list.items[0];
-        const family_utf16 = try std.unicode.utf8ToUtf16LeAllocZ(self.alloc, configured);
+    // Walk through the configured font-family list and pick the first
+    // font that actually exists on the system.
+    for (self.config.@"font-family".list.items) |family| {
+        const family_utf16 = try std.unicode.utf8ToUtf16LeAllocZ(self.alloc, family);
+        errdefer self.alloc.free(family_utf16);
 
-        return .{
-            .family_utf16 = family_utf16,
-        };
+        if (try self.systemFontExists(family_utf16.ptr)) {
+            return .{ .family_utf16 = family_utf16 };
+        }
+
+        self.alloc.free(family_utf16);
     }
 
     return .{
