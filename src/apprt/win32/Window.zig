@@ -874,6 +874,24 @@ fn createHwnd(self: *Window, title_override: ?[:0]const u8) !void {
         null,
     );
     if (self.hwnd == null) return error.Win32Error;
+
+    // Set dark mode BEFORE showing the window so DWM renders the correct
+    // Acrylic tone on the first frame rather than defaulting to light.
+    const dark_mode: u32 = switch (self.app.config.@"window-theme") {
+        .dark => 1,
+        .light => 0,
+        .auto, .system, .ghostty => switch (self.app.detectColorScheme()) {
+            .dark => 1,
+            .light => 0,
+        },
+    };
+    _ = sys.DwmSetWindowAttribute(
+        self.hwnd.?,
+        sys.DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &dark_mode,
+        @sizeOf(@TypeOf(dark_mode)),
+    );
+
     _ = sys.ShowWindow(self.hwnd.?, sys.SW_SHOWNORMAL);
     _ = sys.UpdateWindow(self.hwnd.?);
 }
