@@ -279,6 +279,7 @@ pub fn setFontGrid(self: *Direct2D, grid: *font.SharedGrid) void {
 pub fn setScreenSize(self: *Direct2D, size: renderer.Size) void {
     self.size = size;
     if (self.target) |target| {
+        if (size.screen.width == 0 or size.screen.height == 0) return;
         var pixel_size: d2d.D2D_SIZE_U = .{
             .width = @max(1, size.screen.width),
             .height = @max(1, size.screen.height),
@@ -431,15 +432,15 @@ pub fn drawFrame(self: *Direct2D, sync: bool) !void {
         _ = render_target.EndDraw();
         return err;
     };
-    self.drawScrollbar(render_target) catch |err| {
-        _ = render_target.EndDraw();
-        return err;
-    };
     self.drawPreedit(render_target) catch |err| {
         _ = render_target.EndDraw();
         return err;
     };
     self.drawCursor(render_target) catch |err| {
+        _ = render_target.EndDraw();
+        return err;
+    };
+    self.drawScrollbar(render_target) catch |err| {
         _ = render_target.EndDraw();
         return err;
     };
@@ -493,7 +494,10 @@ fn ensureTarget(self: *Direct2D) !void {
             .width = @max(1, self.size.screen.width),
             .height = @max(1, self.size.screen.height),
         },
-        .presentOptions = .{},
+        .presentOptions = .{
+            .RETAIN_CONTENTS = 0,
+            .IMMEDIATELY = 1,
+        },
     };
 
     var target: *d2d.ID2D1HwndRenderTarget = undefined;
@@ -614,8 +618,54 @@ fn backgroundClearOpacity(self: *const Direct2D) f32 {
     const opacity: f32 = @floatCast(self.config.background_opacity);
     return switch (self.config.background_blur) {
         .false => opacity,
-        else => 0.0,
+        else => @max(0.08, opacity * 0.35),
     };
+}
+
+fn drawScrollbar(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
+    if (self.config.scrollbar == .never) return;
+    if (self.rt_surface.window) |window| {
+        if (window.in_window_resize) return;
+    }
+    if (self.scrollbar.total <= self.scrollbar.len or self.scrollbar.total == 0) return;
+
+    const screen_w: f32 = @floatFromInt(self.size.screen.width);
+    const screen_h: f32 = @floatFromInt(self.size.screen.height);
+    if (screen_w <= 0 or screen_h <= 0) return;
+
+    const control_w: f32 = 16.0;
+    const margin: f32 = 2.0;
+    const hovered = self.rt_surface.scrollbarDrawHovered();
+    const thumb_w: f32 = if (hovered) 12.0 else 6.0;
+    const gutter: f32 = @floatFromInt(self.rt_surface.scrollbarResizeGutter());
+    const track_right = @max(0.0, screen_w - gutter);
+    if (track_right <= 0.0) return;
+    const right = @max(0.0, track_right - 2.0);
+    const track_left = @max(0.0, track_right - control_w);
+
+    var track: d2d.D2D_RECT_F = .{
+        .left = track_left,
+        .top = 0,
+        .right = track_right,
+        .bottom = screen_h,
+    };
+    try fillRectangle(target, &track, .{ .r = 0.18, .g = 0.18, .b = 0.18, .a = 0.52 });
+
+    const track_h = @max(1.0, screen_h - margin * 2.0);
+    const visible_ratio = @min(1.0, @as(f32, @floatFromInt(self.scrollbar.len)) / @as(f32, @floatFromInt(self.scrollbar.total)));
+    const thumb_h = @max(28.0, track_h * visible_ratio);
+    const travel = @max(0.0, track_h - thumb_h);
+    const max_offset = self.scrollbar.total - self.scrollbar.len;
+    const offset_ratio: f32 = if (max_offset == 0) 0.0 else @as(f32, @floatFromInt(self.scrollbar.offset)) / @as(f32, @floatFromInt(max_offset));
+    const top = margin + travel * @min(1.0, offset_ratio);
+    var thumb: d2d.D2D_RECT_F = .{
+        .left = right - thumb_w,
+        .top = top,
+        .right = right,
+        .bottom = @min(screen_h - margin, top + thumb_h),
+    };
+    const thumb_alpha: f32 = if (hovered) 0.92 else 0.72;
+    try fillRectangle(target, &thumb, .{ .r = 0.86, .g = 0.86, .b = 0.86, .a = thumb_alpha });
 }
 
 fn selectedKind(
@@ -1140,34 +1190,6 @@ fn appendCodepointUtf16(buf: *std.ArrayListUnmanaged(u16), alloc: Allocator, cp:
     const value: u32 = @as(u32, cp) - 0x10000;
     try buf.append(alloc, @intCast(0xD800 + (value >> 10)));
     try buf.append(alloc, @intCast(0xDC00 + (value & 0x3FF)));
-}
-
-fn drawScrollbar(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
-    if (self.config.scrollbar == .never) return;
-    const scrollbar = self.scrollbar;
-    if (scrollbar.total <= scrollbar.len or scrollbar.total == 0) return;
-
-    const screen_h: f32 = @floatFromInt(self.size.screen.height);
-    const screen_w: f32 = @floatFromInt(self.size.screen.width);
-    if (screen_h <= 0 or screen_w <= 0) return;
-
-    const width: f32 = @max(3.0, @min(8.0, @as(f32, @floatFromInt(self.size.cell.width)) * 0.35));
-    const margin: f32 = 2.0;
-    const track_h = @max(1.0, screen_h - margin * 2);
-    const total_f: f32 = @floatFromInt(scrollbar.total);
-    const len_f: f32 = @floatFromInt(scrollbar.len);
-    const offset_f: f32 = @floatFromInt(scrollbar.offset);
-    const thumb_h = @max(20.0, track_h * @min(1.0, len_f / total_f));
-    const max_offset = @max(1.0, total_f - len_f);
-    const top = margin + (track_h - thumb_h) * @min(1.0, offset_f / max_offset);
-    var rect: d2d.D2D_RECT_F = .{
-        .left = screen_w - width - margin,
-        .top = top,
-        .right = screen_w - margin,
-        .bottom = top + thumb_h,
-    };
-
-    try fillRectangle(target, &rect, colorF(self.terminal_state.colors.foreground, 0.35));
 }
 
 fn cellTextUtf16(

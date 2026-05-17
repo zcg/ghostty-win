@@ -40,6 +40,8 @@ const WM_MOUSEMOVE: UINT = 0x0200;
 const WM_CAPTURECHANGED: UINT = 0x0215;
 const WM_SETCURSOR: UINT = 0x0020;
 const WM_NCHITTEST: UINT = 0x0084;
+pub const WM_ENTERSIZEMOVE: UINT = 0x0231;
+pub const WM_EXITSIZEMOVE: UINT = 0x0232;
 const SW_HIDE: c_int = 0;
 const TOP_BAR_HEIGHT: i32 = 46;
 const DIVIDER_THICKNESS: i32 = 10;
@@ -73,6 +75,7 @@ extern "user32" fn FillRect(hDC: ?*anyopaque, lprc: *const RECT, hbr: ?*anyopaqu
 extern "user32" fn SetCapture(hWnd: HWND) callconv(.winapi) ?HWND;
 extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
 extern "user32" fn SetCursor(hCursor: sys.HCURSOR) callconv(.winapi) sys.HCURSOR;
+extern "user32" fn ScreenToClient(hWnd: HWND, lpPoint: *sys.POINT) callconv(.winapi) BOOL;
 
 var divider_class_registered: bool = false;
 var title_bar_class_registered: bool = false;
@@ -631,6 +634,9 @@ fullscreen: FullscreenState = .{},
 quick_terminal: bool = false,
 dividers: std.ArrayListUnmanaged(*DividerState) = .{},
 drag: ?DividerDrag = null,
+in_window_resize: bool = false,
+pending_core_resize: bool = false,
+pending_window_relayout: bool = false,
 
 const FullscreenState = struct {
     active: bool = false,
@@ -1763,6 +1769,76 @@ pub fn relayout(self: *Window) void {
     self.updateDividers(bounds);
 }
 
+pub fn beginWindowResize(self: *Window) void {
+    self.in_window_resize = true;
+    self.pending_core_resize = false;
+    self.pending_window_relayout = false;
+    self.hideVisibleScrollbars();
+}
+
+pub fn endWindowResize(self: *Window) void {
+    self.in_window_resize = false;
+    if (self.pending_window_relayout) {
+        self.pending_window_relayout = false;
+        self.relayout();
+    }
+    if (self.pending_core_resize) {
+        self.pending_core_resize = false;
+        self.commitVisibleSurfaceSizes();
+    }
+    self.refreshVisibleScrollbars();
+    self.forceFullRedraw();
+}
+
+pub fn deferCoreResize(self: *Window) bool {
+    if (!self.in_window_resize) return false;
+    self.pending_core_resize = true;
+    return true;
+}
+
+pub fn deferWindowRelayout(self: *Window) bool {
+    if (!self.in_window_resize) return false;
+    self.pending_window_relayout = true;
+    return true;
+}
+
+fn commitVisibleSurfaceSizes(self: *Window) void {
+    const tree = &(self.tree orelse return);
+    var leaves: [64]*Surface = undefined;
+    const count = tree.collectLeaves(&leaves);
+    for (leaves[0..count]) |surface| {
+        surface.commitCoreResize();
+    }
+}
+
+fn hideVisibleScrollbars(self: *Window) void {
+    const tree = &(self.tree orelse return);
+    var leaves: [64]*Surface = undefined;
+    const count = tree.collectLeaves(&leaves);
+    for (leaves[0..count]) |surface| {
+        surface.hideScrollbarOverlay();
+    }
+}
+
+fn refreshVisibleScrollbars(self: *Window) void {
+    const tree = &(self.tree orelse return);
+    var leaves: [64]*Surface = undefined;
+    const count = tree.collectLeaves(&leaves);
+    for (leaves[0..count]) |surface| {
+        surface.refreshScrollbarOverlay();
+    }
+}
+
+pub fn forceFullRedraw(self: *Window) void {
+    const hwnd = self.hwnd orelse return;
+    _ = sys.RedrawWindow(
+        hwnd,
+        null,
+        null,
+        sys.RDW_INVALIDATE | sys.RDW_ERASE | sys.RDW_ALLCHILDREN | sys.RDW_UPDATENOW,
+    );
+}
+
 fn visibleClientInset(self: *Window) ClientInset {
     const hwnd = self.hwnd orelse return .{};
     if (self.fullscreen.active or sys.IsZoomed(hwnd) == 0) return .{};
@@ -2083,6 +2159,12 @@ pub fn isResizeHit(_: *Window, hit: LRESULT) bool {
     };
 }
 
+pub fn rightResizeGutter(self: *Window) i32 {
+    const hwnd = self.hwnd orelse return 0;
+    if (self.fullscreen.active or sys.IsZoomed(hwnd) != 0) return 0;
+    return resizeBorderX();
+}
+
 pub fn hitTestPoint(self: *Window, x: i32, y: i32) LRESULT {
     const hwnd = self.hwnd orelse return sys.HTCLIENT;
 
@@ -2108,6 +2190,8 @@ pub fn hitTestPoint(self: *Window, x: i32, y: i32) LRESULT {
         if (right) return sys.HTRIGHT;
     }
 
+    if (self.hitTestScrollbarScreenPoint(hwnd, x, y)) return sys.HTCLIENT;
+
     if (y < rect.top + self.tabClientHeight()) {
         const button_area_left = rect.right - WINDOW_BUTTON_WIDTH * WINDOW_BUTTON_COUNT;
         if (x >= button_area_left and y < rect.top + TITLE_BUTTON_HIT_HEIGHT) {
@@ -2121,6 +2205,19 @@ pub fn hitTestPoint(self: *Window, x: i32, y: i32) LRESULT {
         return sys.HTCAPTION;
     }
     return sys.HTCLIENT;
+}
+
+fn hitTestScrollbarScreenPoint(self: *Window, hwnd: HWND, x: i32, y: i32) bool {
+    const tree = &(self.tree orelse return false);
+    var pt: sys.POINT = .{ .x = x, .y = y };
+    if (ScreenToClient(hwnd, &pt) == 0) return false;
+
+    var leaves: [64]*Surface = undefined;
+    const count = tree.collectLeaves(&leaves);
+    for (leaves[0..count]) |surface| {
+        if (surface.scrollbarWindowHitTest(pt.x, pt.y)) return true;
+    }
+    return false;
 }
 
 fn resizeBorderX() i32 {

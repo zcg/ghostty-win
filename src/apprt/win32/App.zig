@@ -59,6 +59,7 @@ extern "user32" fn SetLayeredWindowAttributes(hWnd: HWND, crKey: u32, bAlpha: u8
 extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
 extern "user32" fn FlashWindowEx(pfwi: *FLASHWINFO) callconv(.winapi) BOOL;
 extern "user32" fn ClientToScreen(hWnd: HWND, lpPoint: *sys.POINT) callconv(.winapi) BOOL;
+extern "user32" fn ScreenToClient(hWnd: HWND, lpPoint: *sys.POINT) callconv(.winapi) BOOL;
 const WS_EX_LAYERED: u32 = 0x00080000;
 
 const FLASHWINFO = extern struct {
@@ -683,7 +684,14 @@ pub fn performAction(
         .pwd => return true,
         .secure_input => return true,
         .initial_size, .cell_size, .size_limit => return true,
-        .scrollbar => return true,
+        .scrollbar => {
+            const surface = switch (target) {
+                .app => return false,
+                .surface => |core| core.rt_surface,
+            };
+            surface.setScrollbar(value);
+            return true;
+        },
         .close_all_windows => {
             // Close all windows
             var i = self.windows.items.len;
@@ -1349,6 +1357,7 @@ pub fn wndProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.
         WM_SIZE => {
             if (getWindow(hwnd)) |window| {
                 if (window.surface_initialized and window.tree != null) {
+                    if (window.deferWindowRelayout()) return 0;
                     window.relayout();
                 } else {
                     var rect: sys.RECT = std.mem.zeroes(sys.RECT);
@@ -1358,6 +1367,14 @@ pub fn wndProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.
                     }
                 }
             }
+            return 0;
+        },
+        Window.WM_ENTERSIZEMOVE => {
+            if (getWindow(hwnd)) |window| window.beginWindowResize();
+            return 0;
+        },
+        Window.WM_EXITSIZEMOVE => {
+            if (getWindow(hwnd)) |window| window.endWindowResize();
             return 0;
         },
         0x001A => { // WM_SETTINGCHANGE
@@ -1415,7 +1432,17 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
     switch (msg) {
         WM_ERASEBKGND => return 1,
         sys.WM_NCHITTEST => {
-            if (surface.window) |window| return window.hitTestTopLevel(lparam);
+            if (surface.window) |window| {
+                var pt: sys.POINT = .{
+                    .x = signExtendLowWord(lparam),
+                    .y = signExtendHighWord(lparam),
+                };
+                _ = ScreenToClient(hwnd, &pt);
+                const hit = window.hitTestTopLevel(lparam);
+                if (window.isResizeHit(hit)) return sys.HTTRANSPARENT;
+                if (surface.scrollbarInteractionHitTest(pt.x, pt.y)) return sys.HTCLIENT;
+                return hit;
+            }
             return sys.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
         WM_PAINT => {
@@ -1431,12 +1458,19 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
                 surface.width = width;
                 surface.height = height;
                 if (surface.core_surface) |core| {
+                    if (surface.window) |window| {
+                        if (window.deferCoreResize()) {
+                            surface.notePendingCoreResize(width, height);
+                            return 0;
+                        }
+                    }
                     core.sizeCallback(.{
                         .width = width,
                         .height = height,
                     }) catch |err| {
                         log.err("size callback error: {}", .{err});
                     };
+                    surface.syncRendererSize(core, width, height, false);
                 }
             }
             return 0;
@@ -1499,8 +1533,15 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
         },
         0x0200 => {
             if (surface.core_surface) |core| {
-                const x: f32 = @floatFromInt(@as(i16, @truncate(lparam & 0xFFFF)));
-                const y: f32 = @floatFromInt(@as(i16, @truncate((lparam >> 16) & 0xFFFF)));
+                const client_x = @as(i16, @truncate(lparam & 0xFFFF));
+                const client_y = @as(i16, @truncate((lparam >> 16) & 0xFFFF));
+                if (surface.isScrollbarDragging() or surface.scrollbarInteractionHitTest(client_x, client_y)) {
+                    surface.handleScrollbarMouseMove(client_y);
+                    return 0;
+                }
+                surface.clearScrollbarHover();
+                const x: f32 = @floatFromInt(client_x);
+                const y: f32 = @floatFromInt(client_y);
                 surface.cursor_pos = .{ .x = x, .y = y };
                 core.cursorPosCallback(.{ .x = x, .y = y }, getModifiers()) catch {};
             }
@@ -1509,10 +1550,12 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
         0x0201, 0x0204, 0x0207 => {
             if (surface.core_surface) |core| {
                 if (msg == 0x0201) {
+                    const client_x = @as(i16, @truncate(lparam & 0xFFFF));
+                    const client_y = @as(i16, @truncate((lparam >> 16) & 0xFFFF));
                     if (surface.window) |window| {
                         var pt: sys.POINT = .{
-                            .x = @as(i16, @truncate(lparam & 0xFFFF)),
-                            .y = @as(i16, @truncate((lparam >> 16) & 0xFFFF)),
+                            .x = client_x,
+                            .y = client_y,
                         };
                         if (ClientToScreen(hwnd, &pt) != 0) {
                             const hit = window.hitTestPoint(pt.x, pt.y);
@@ -1522,6 +1565,10 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
                                 return 0;
                             }
                         }
+                    }
+                    if (surface.scrollbarInteractionHitTest(client_x, client_y)) {
+                        surface.handleScrollbarMouseDown(hwnd, client_y);
+                        return 0;
                     }
                 }
                 surface.cursor_pos = .{
@@ -1546,6 +1593,7 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
             return 0;
         },
         0x0202, 0x0205, 0x0208 => {
+            if (msg == 0x0202 and surface.handleScrollbarMouseUp()) return 0;
             if (surface.core_surface) |core| {
                 surface.cursor_pos = .{
                     .x = @floatFromInt(@as(i16, @truncate(lparam & 0xFFFF))),
@@ -1565,9 +1613,12 @@ pub fn surfaceDispatch(app: *App, surface: *Surface, hwnd: HWND, msg: UINT, wpar
         },
         0x020A => {
             if (surface.core_surface) |core| {
+                const client_x = @as(i16, @truncate(lparam & 0xFFFF));
+                const client_y = @as(i16, @truncate((lparam >> 16) & 0xFFFF));
+                if (surface.scrollbarInteractionHitTest(client_x, client_y) and surface.handleScrollbarWheel(wparam)) return 0;
                 surface.cursor_pos = .{
-                    .x = @floatFromInt(@as(i16, @truncate(lparam & 0xFFFF))),
-                    .y = @floatFromInt(@as(i16, @truncate((lparam >> 16) & 0xFFFF))),
+                    .x = @floatFromInt(client_x),
+                    .y = @floatFromInt(client_y),
                 };
                 const delta: i16 = @truncate(@as(isize, @bitCast(wparam)) >> 16);
                 const yoff: f64 = @as(f64, @floatFromInt(delta)) / 120.0;
@@ -1628,4 +1679,12 @@ fn packMousePoint(x: i32, y: i32) LPARAM {
     const hi: u16 = @bitCast(@as(i16, @truncate(y)));
     const value: u32 = @as(u32, lo) | (@as(u32, hi) << 16);
     return @bitCast(@as(usize, value));
+}
+
+fn signExtendLowWord(value: LPARAM) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(value))))));
+}
+
+fn signExtendHighWord(value: LPARAM) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(value)) >> 16))));
 }

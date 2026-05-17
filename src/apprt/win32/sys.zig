@@ -114,6 +114,7 @@ pub const WS_EX_TOPMOST: i32 = 0x00000008;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 
 // Hit-test values returned from WM_NCHITTEST.
+pub const HTTRANSPARENT: LRESULT = -1;
 pub const HTCLIENT: LRESULT = 1;
 pub const HTCAPTION: LRESULT = 2;
 pub const HTMINBUTTON: LRESULT = 8;
@@ -153,6 +154,11 @@ pub const LWA_ALPHA: DWORD = 0x00000002;
 pub const TME_LEAVE: DWORD = 0x00000002;
 pub const TME_NONCLIENT: DWORD = 0x00000010;
 
+pub const RDW_INVALIDATE: UINT = 0x0001;
+pub const RDW_ERASE: UINT = 0x0004;
+pub const RDW_ALLCHILDREN: UINT = 0x0080;
+pub const RDW_UPDATENOW: UINT = 0x0100;
+
 pub const IDC_ARROW: ?[*:0]align(1) const u16 = @ptrFromInt(32512);
 
 // Win32 API functions
@@ -176,6 +182,7 @@ pub extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: c_int, dwNewLong: L
 pub extern "user32" fn GetWindowLongPtrW(hWnd: HWND, nIndex: c_int) callconv(.winapi) LONG_PTR;
 pub extern "user32" fn GetClientRect(hWnd: HWND, lpRect: *RECT) callconv(.winapi) BOOL;
 pub extern "user32" fn InvalidateRect(hWnd: ?HWND, lpRect: ?*const RECT, bErase: BOOL) callconv(.winapi) BOOL;
+pub extern "user32" fn RedrawWindow(hWnd: ?HWND, lprcUpdate: ?*const RECT, hrgnUpdate: ?*anyopaque, flags: UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn TrackMouseEvent(lpEventTrack: *TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callconv(.winapi) ?HINSTANCE;
 pub extern "user32" fn GetKeyState(nVirtKey: c_int) callconv(.winapi) i16;

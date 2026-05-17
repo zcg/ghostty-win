@@ -19,6 +19,7 @@ const log = std.log.scoped(.win32_surface);
 const HWND = std.os.windows.HWND;
 const HINSTANCE = std.os.windows.HINSTANCE;
 const BOOL = i32;
+const UINT = u32;
 const HDC = ?*anyopaque;
 const HGLRC = ?*anyopaque;
 const RECT = extern struct { left: i32, top: i32, right: i32, bottom: i32 };
@@ -89,9 +90,11 @@ extern "user32" fn KillTimer(hWnd: ?HWND, uIDEvent: usize) callconv(.winapi) BOO
 extern "user32" fn FillRect(hDC: ?*anyopaque, lprc: *const RECT, hbr: ?*anyopaque) callconv(.winapi) c_int;
 extern "gdi32" fn CreateSolidBrush(color: u32) callconv(.winapi) ?*anyopaque;
 extern "gdi32" fn DeleteObject(ho: ?*anyopaque) callconv(.winapi) BOOL;
+extern "user32" fn SetCapture(hWnd: HWND) callconv(.winapi) ?HWND;
+extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
+extern "user32" fn ClientToScreen(hWnd: HWND, lpPoint: *sys.POINT) callconv(.winapi) BOOL;
 
 // Clipboard API
-const UINT = u32;
 const HANDLE = ?*anyopaque;
 extern "user32" fn OpenClipboard(hWndNewOwner: ?HWND) callconv(.winapi) BOOL;
 extern "user32" fn CloseClipboard() callconv(.winapi) BOOL;
@@ -138,9 +141,19 @@ progress_visible: bool = false,
 progress_state: terminal.osc.Command.ProgressReport.State = .remove,
 progress_value: ?u8 = null,
 progress_phase: u8 = 0,
+scrollbar_hwnd: ?HWND = null,
+scrollbar_drag: ?ScrollbarDrag = null,
+scrollbar_hovered: bool = false,
+scrollbar_tracking_leave: bool = false,
 layout_x: i32 = 0,
 layout_y: i32 = 0,
 layout_w: i32 = 0,
+layout_h: i32 = 0,
+last_renderer_w: u32 = 0,
+last_renderer_h: u32 = 0,
+pending_core_resize_w: u32 = 0,
+pending_core_resize_h: u32 = 0,
+scrollbar: terminal.Scrollbar = .zero,
 
 const App = @import("App.zig");
 const Window = @import("Window.zig");
@@ -154,7 +167,31 @@ const SW_HIDE: c_int = 0;
 const SW_SHOWNORMAL: c_int = 1;
 const WM_PAINT: UINT = 0x000F;
 const WM_TIMER: UINT = 0x0113;
+const WM_ERASEBKGND: UINT = 0x0014;
+const WM_SETCURSOR: UINT = 0x0020;
+const WM_NCHITTEST: UINT = 0x0084;
+const WM_MOUSEMOVE: UINT = 0x0200;
+const WM_LBUTTONDOWN: UINT = 0x0201;
+const WM_LBUTTONUP: UINT = 0x0202;
+const WM_MOUSEWHEEL: UINT = 0x020A;
+const WM_CAPTURECHANGED: UINT = 0x0215;
+const HWND_TOP: ?HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, 0))));
+const SWP_NOACTIVATE: UINT = 0x0010;
+const SWP_SHOWWINDOW: UINT = 0x0040;
+const HTTRANSPARENT: isize = -1;
+const scrollbar_margin: i32 = 2;
+const scrollbar_control_w: i32 = 16;
+const scrollbar_thumb_min_h: i32 = 28;
+const scrollbar_idle_thumb_w: i32 = 6;
+const scrollbar_hover_thumb_w: i32 = 12;
+const scrollbar_wheel_rows: usize = 3;
+const WHEEL_DELTA: i32 = 120;
 var progress_class_registered: bool = false;
+var scrollbar_class_registered: bool = false;
+
+const ScrollbarDrag = struct {
+    grab_y: i32,
+};
 
 pub fn core(self: *Self) *CoreSurface {
     return self.core_surface.?;
@@ -253,6 +290,13 @@ fn surfaceWndProc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) callconv(.
     return App.surfaceDispatch(app, self, hwnd, msg, wparam, lparam);
 }
 
+fn scrollbarWndProc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) callconv(.winapi) isize {
+    const ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (ptr == 0) return DefWindowProcW(hwnd, msg, wparam, lparam);
+    const self: *Self = @ptrFromInt(@as(usize, @bitCast(ptr)));
+    return self.handleScrollbarMessage(hwnd, msg, wparam, lparam);
+}
+
 fn progressWndProc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) callconv(.winapi) isize {
     const ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     if (ptr == 0) return DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -283,6 +327,11 @@ fn progressWndProc(hwnd: HWND, msg: u32, wparam: usize, lparam: isize) callconv(
 
 pub fn deinit(self: *Self) void {
     self.hideProgressOverlay();
+    if (self.scrollbar_hwnd) |hwnd| {
+        _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        _ = DestroyWindow(hwnd);
+        self.scrollbar_hwnd = null;
+    }
     if (self.progress_hwnd) |hwnd| {
         _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         _ = DestroyWindow(hwnd);
@@ -363,6 +412,7 @@ extern "user32" fn DefWindowProcW(hWnd: HWND, msg: u32, wParam: usize, lParam: i
 extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) callconv(.winapi) isize;
 extern "user32" fn GetWindowLongPtrW(hWnd: HWND, nIndex: i32) callconv(.winapi) isize;
 extern "user32" fn DestroyWindow(hWnd: HWND) callconv(.winapi) BOOL;
+extern "user32" fn UpdateWindow(hWnd: HWND) callconv(.winapi) BOOL;
 extern "kernel32" fn GetModuleHandleW(lpModuleName: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
 const GWLP_USERDATA: i32 = -21;
 
@@ -406,6 +456,44 @@ fn createProgressOverlay(self: *Self) !void {
     ) orelse return error.Win32Error;
     self.progress_hwnd = hwnd;
     _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(self)));
+}
+
+fn createScrollbarOverlay(self: *Self) !void {
+    try registerScrollbarClass();
+    const WS_CHILD: u32 = 0x40000000;
+    const WS_CLIPSIBLINGS: u32 = 0x04000000;
+    const hwnd = CreateWindowExW(
+        0,
+        std.unicode.utf8ToUtf16LeStringLiteral("GhosttyScrollbar"),
+        null,
+        WS_CHILD | WS_CLIPSIBLINGS,
+        0,
+        0,
+        scrollbar_control_w,
+        @max(1, self.layout_h),
+        self.hwnd,
+        null,
+        GetModuleHandleW(null),
+        null,
+    ) orelse return error.Win32Error;
+    self.scrollbar_hwnd = hwnd;
+    _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @bitCast(@intFromPtr(self)));
+    self.updateScrollbarOverlayRect();
+}
+
+fn registerScrollbarClass() !void {
+    if (scrollbar_class_registered) return;
+    const class_name = std.unicode.utf8ToUtf16LeStringLiteral("GhosttyScrollbar");
+    const hinstance = GetModuleHandleW(null);
+    var wc: WNDCLASSEXW = std.mem.zeroes(WNDCLASSEXW);
+    wc.cbSize = @sizeOf(WNDCLASSEXW);
+    wc.style = 0x0002 | 0x0001;
+    wc.lpfnWndProc = scrollbarWndProc;
+    wc.hInstance = hinstance;
+    wc.hCursor = LoadCursorW(null, @ptrFromInt(32512));
+    wc.lpszClassName = class_name;
+    if (RegisterClassExW(&wc) == 0) return error.Win32Error;
+    scrollbar_class_registered = true;
 }
 
 fn registerProgressClass() !void {
@@ -491,17 +579,454 @@ pub fn releaseMainThreadContext(self: *Self) void {
 }
 
 pub fn setLayoutRect(self: *Self, x: i32, y: i32, w: i32, h: i32) void {
+    self.layout_x = x;
+    self.layout_y = y;
+    self.layout_w = w;
+    self.layout_h = h;
+    self.updateProgressOverlayRect();
+    self.updateScrollbarOverlayRect();
+}
+
+pub fn syncRendererSize(self: *Self, core_surface: *CoreSurface, width: u32, height: u32, force: bool) void {
+    if (width == 0 or height == 0) return;
+    if (!force and self.last_renderer_w == width and self.last_renderer_h == height) return;
+
+    self.last_renderer_w = width;
+    self.last_renderer_h = height;
+    var size = core_surface.size;
+    size.screen = .{ .width = width, .height = height };
+    _ = core_surface.renderer_thread.mailbox.push(.{
+        .resize = size,
+    }, .{ .forever = {} });
+}
+
+pub fn notePendingCoreResize(self: *Self, width: u32, height: u32) void {
+    self.pending_core_resize_w = width;
+    self.pending_core_resize_h = height;
+}
+
+pub fn commitCoreResize(self: *Self) void {
+    if (self.pending_core_resize_w == 0 or self.pending_core_resize_h == 0) return;
+    const width = self.pending_core_resize_w;
+    const height = self.pending_core_resize_h;
+    self.pending_core_resize_w = 0;
+    self.pending_core_resize_h = 0;
+    const core_surface = self.core_surface orelse return;
+    core_surface.sizeCallback(.{
+        .width = width,
+        .height = height,
+    }) catch |err| log.err("deferred size callback error: {}", .{err});
+    self.syncRendererSize(core_surface, width, height, true);
+}
+
+pub fn setScrollbar(self: *Self, scrollbar: terminal.Scrollbar) void {
+    self.scrollbar = scrollbar;
+    self.updateScrollbarOverlayRect();
+    self.invalidateScrollbarVisual();
+}
+
+pub fn refreshScrollbarOverlay(self: *Self) void {
+    self.updateScrollbarOverlayRect();
+}
+
+pub fn hideScrollbarOverlay(self: *Self) void {
+    self.scrollbar_drag = null;
+    self.scrollbar_hovered = false;
+    self.scrollbar_tracking_leave = false;
+    if (self.scrollbar_hwnd) |hwnd| _ = ShowWindow(hwnd, SW_HIDE);
+}
+
+pub fn hasScrollbar(self: *const Self) bool {
+    return self.scrollbar.total > self.scrollbar.len and self.scrollbar.total != 0;
+}
+
+pub fn scrollbarHitTest(self: *const Self, x: i32, y: i32) bool {
+    _ = self;
     _ = x;
     _ = y;
-    _ = h;
-    self.layout_w = w;
-    self.updateProgressOverlayRect();
+    return false;
+}
+
+pub fn scrollbarInteractionHitTest(self: *const Self, x: i32, y: i32) bool {
+    if (!self.hasScrollbar()) return false;
+    const track = self.scrollbarTrackRect();
+    return x >= track.left and x < track.right and y >= track.top and y < track.bottom;
+}
+
+pub fn scrollbarWindowHitTest(self: *const Self, x: i32, y: i32) bool {
+    if (!self.hasScrollbar()) return false;
+    const local_x = x - self.layout_x;
+    const local_y = y - self.layout_y;
+    return self.scrollbarInteractionHitTest(local_x, local_y);
+}
+
+fn scrollbarTrackRect(self: *const Self) RECT {
+    const h = if (self.layout_h > 0) self.layout_h else @as(i32, @intCast(self.height));
+    const left = self.scrollbarControlLeft();
+    const right = self.scrollbarControlRight();
+    return .{
+        .left = left,
+        .top = scrollbar_margin,
+        .right = right,
+        .bottom = @max(scrollbar_margin, h - scrollbar_margin),
+    };
+}
+
+fn scrollbarControlLeft(self: *const Self) i32 {
+    return @max(0, self.scrollbarControlRight() - scrollbar_control_w);
+}
+
+fn scrollbarControlRight(self: *const Self) i32 {
+    const w = if (self.layout_w > 0) self.layout_w else @as(i32, @intCast(self.width));
+    return @max(0, w - self.scrollbarResizeGutter());
+}
+
+pub fn scrollbarResizeGutter(self: *const Self) i32 {
+    const window = self.window orelse return 0;
+    const gutter = window.rightResizeGutter();
+    if (gutter <= 0) return 0;
+
+    const top_hwnd = window.hwnd orelse return 0;
+    var rect: RECT = std.mem.zeroes(RECT);
+    if (GetClientRect(top_hwnd, &rect) == 0) return 0;
+
+    const surface_right = self.layout_x + if (self.layout_w > 0) self.layout_w else @as(i32, @intCast(self.width));
+    if (surface_right < rect.right - gutter) return 0;
+    return gutter;
+}
+
+fn scrollToScrollbarOffset(self: *Self, target: usize) void {
+    const core_surface = self.core_surface orelse return;
+    core_surface.renderer_state.mutex.lock();
+    core_surface.io.terminal.screens.active.scroll(.{ .row = target });
+    core_surface.renderer_state.mutex.unlock();
+    core_surface.refreshCallback() catch |err| log.warn("scrollbar drag render failed err={}", .{err});
+}
+
+fn updateScrollbarOverlayRect(self: *Self) void {
+    const hwnd = self.scrollbar_hwnd orelse return;
+    if (self.window) |window| {
+        if (window.in_window_resize) {
+            self.hideScrollbarOverlay();
+            return;
+        }
+    }
+    if (!self.hasScrollbar() or self.layout_w <= scrollbar_control_w or self.layout_h <= 0) {
+        self.hideScrollbarOverlay();
+        return;
+    }
+    const track = self.scrollbarTrackRect();
+    const width = @max(1, track.right - track.left);
+    const height = @max(1, track.bottom - track.top);
+    const flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+    _ = SetWindowPos(hwnd, HWND_TOP, track.left, track.top, width, height, flags);
+    self.invalidateScrollbar();
+    _ = UpdateWindow(hwnd);
+}
+
+fn invalidateScrollbar(self: *Self) void {
+    if (self.scrollbar_hwnd) |hwnd| {
+        _ = InvalidateRect(hwnd, null, 0);
+    }
+    self.invalidateScrollbarVisual();
+}
+
+fn invalidateScrollbarVisual(self: *Self) void {
+    _ = InvalidateRect(self.hwnd, null, 0);
+    const core_surface = self.core_surface orelse return;
+    core_surface.refreshCallback() catch |err| log.warn("scrollbar render refresh failed err={}", .{err});
+}
+
+pub fn isScrollbarDragging(self: *const Self) bool {
+    return self.scrollbar_drag != null;
+}
+
+pub fn scrollbarDrawHovered(self: *const Self) bool {
+    return self.scrollbar_hovered or self.scrollbar_drag != null;
+}
+
+pub fn clearScrollbarHover(self: *Self) void {
+    if (self.scrollbar_drag != null or !self.scrollbar_hovered) return;
+    self.scrollbar_hovered = false;
+    self.invalidateScrollbar();
+}
+
+pub fn handleScrollbarMouseMove(self: *Self, y: i32) void {
+    if (self.scrollbar_drag != null) {
+        self.scrollbarDragTo(y);
+        return;
+    }
+    if (!self.scrollbar_hovered) {
+        self.scrollbar_hovered = true;
+        self.invalidateScrollbar();
+    }
+}
+
+pub fn handleScrollbarMouseDown(self: *Self, hwnd: HWND, y: i32) void {
+    if (!self.hasScrollbar()) return;
+    const thumb = self.scrollbarThumbRect();
+    if (y >= thumb.top and y < thumb.bottom) {
+        self.scrollbar_drag = .{ .grab_y = y - thumb.top };
+        self.scrollbar_hovered = true;
+        _ = SetCapture(hwnd);
+        self.invalidateScrollbar();
+    } else if (y < thumb.top) {
+        self.scrollbarApplyOffset(self.scrollbar.offset -| self.scrollbar.len);
+    } else {
+        self.scrollbarApplyOffset(self.scrollbar.offset + self.scrollbar.len);
+    }
+}
+
+pub fn handleScrollbarMouseUp(self: *Self) bool {
+    if (self.scrollbar_drag == null) return false;
+    self.scrollbar_drag = null;
+    _ = ReleaseCapture();
+    self.invalidateScrollbar();
+    return true;
+}
+
+pub fn handleScrollbarWheel(self: *Self, wparam: usize) bool {
+    if (!self.hasScrollbar()) return false;
+    const delta = wheelDelta(wparam);
+    const steps_i32 = @max(1, @divTrunc(@abs(delta), WHEEL_DELTA));
+    const rows: usize = @intCast(steps_i32 * @as(i32, @intCast(scrollbar_wheel_rows)));
+    if (delta > 0) {
+        self.scrollbarApplyOffset(self.scrollbar.offset -| rows);
+    } else if (delta < 0) {
+        self.scrollbarApplyOffset(self.scrollbar.offset + rows);
+    }
+    return true;
+}
+
+fn handleScrollbarMessage(self: *Self, hwnd: HWND, msg: u32, wparam: usize, lparam: isize) isize {
+    switch (msg) {
+        WM_NCHITTEST => {
+            if (self.scrollbarResizeHit(lparam)) return HTTRANSPARENT;
+            return sys.HTCLIENT;
+        },
+        WM_ERASEBKGND => return 1,
+        WM_PAINT => {
+            self.paintScrollbar(hwnd);
+            return 0;
+        },
+        WM_SETCURSOR => {
+            const cursor = LoadCursorW(null, @ptrFromInt(32512));
+            _ = SetCursor(cursor);
+            return 1;
+        },
+        WM_MOUSEMOVE => {
+            const y = lparamY(lparam);
+            if (self.scrollbar_drag != null) {
+                self.scrollbarDragTo(y);
+                return 0;
+            }
+            if (!self.scrollbar_hovered) {
+                self.scrollbar_hovered = true;
+                self.invalidateScrollbar();
+            }
+            self.trackScrollbarMouseLeave(hwnd);
+            return 0;
+        },
+        sys.WM_MOUSELEAVE => {
+            self.scrollbar_tracking_leave = false;
+            if (self.scrollbar_drag == null and self.scrollbar_hovered) {
+                self.scrollbar_hovered = false;
+                self.invalidateScrollbar();
+            }
+            return 0;
+        },
+        WM_LBUTTONDOWN => {
+            if (self.forwardResizeDrag(hwnd, lparam)) return 0;
+            if (!self.hasScrollbar()) return 0;
+            const y = lparamY(lparam);
+            const thumb = self.scrollbarThumbRect();
+            if (y >= thumb.top and y < thumb.bottom) {
+                self.scrollbar_drag = .{ .grab_y = y - thumb.top };
+                self.scrollbar_hovered = true;
+                _ = SetCapture(hwnd);
+                self.invalidateScrollbar();
+            } else if (y < thumb.top) {
+                self.scrollbarApplyOffset(self.scrollbar.offset -| self.scrollbar.len);
+            } else {
+                self.scrollbarApplyOffset(self.scrollbar.offset + self.scrollbar.len);
+            }
+            return 0;
+        },
+        WM_LBUTTONUP => {
+            if (self.scrollbar_drag != null) {
+                self.scrollbar_drag = null;
+                _ = ReleaseCapture();
+                self.invalidateScrollbar();
+            }
+            return 0;
+        },
+        WM_CAPTURECHANGED => {
+            if (self.scrollbar_drag != null) {
+                self.scrollbar_drag = null;
+                self.invalidateScrollbar();
+            }
+            return 0;
+        },
+        WM_MOUSEWHEEL => {
+            if (!self.hasScrollbar()) return 0;
+            const delta = wheelDelta(wparam);
+            const steps_i32 = @max(1, @divTrunc(@abs(delta), WHEEL_DELTA));
+            const rows: usize = @intCast(steps_i32 * @as(i32, @intCast(scrollbar_wheel_rows)));
+            if (delta > 0) {
+                self.scrollbarApplyOffset(self.scrollbar.offset -| rows);
+            } else if (delta < 0) {
+                self.scrollbarApplyOffset(self.scrollbar.offset + rows);
+            }
+            return 0;
+        },
+        else => return DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+fn trackScrollbarMouseLeave(self: *Self, hwnd: HWND) void {
+    if (self.scrollbar_tracking_leave) return;
+    var tme: sys.TRACKMOUSEEVENT = .{
+        .cbSize = @sizeOf(sys.TRACKMOUSEEVENT),
+        .dwFlags = sys.TME_LEAVE,
+        .hwndTrack = hwnd,
+        .dwHoverTime = 0,
+    };
+    if (sys.TrackMouseEvent(&tme) != 0) self.scrollbar_tracking_leave = true;
+}
+
+fn paintScrollbar(self: *Self, hwnd: HWND) void {
+    var ps: PAINTSTRUCT = std.mem.zeroes(PAINTSTRUCT);
+    const hdc = BeginPaint(hwnd, &ps);
+    defer _ = EndPaint(hwnd, &ps);
+
+    var rect: RECT = std.mem.zeroes(RECT);
+    _ = GetClientRect(hwnd, &rect);
+    fillRectColor(hdc, rect, 0x002C2C2C);
+
+    if (!self.hasScrollbar()) return;
+    const thumb = self.scrollbarThumbRect();
+    if (thumb.bottom <= thumb.top or thumb.right <= thumb.left) return;
+
+    const color: u32 = if (self.scrollbar_drag != null)
+        0x00F0F0F0
+    else if (self.scrollbar_hovered)
+        0x00D0D0D0
+    else
+        0x00A8A8A8;
+    fillRectColor(hdc, thumb, color);
+}
+
+fn fillRectColor(hdc: HDC, rect: RECT, color: u32) void {
+    const brush = CreateSolidBrush(color);
+    if (brush != null) {
+        _ = FillRect(hdc, &rect, brush);
+        _ = DeleteObject(brush);
+    }
+}
+
+fn scrollbarThumbRect(self: *const Self) RECT {
+    var rect: RECT = .{ .left = 0, .top = 0, .right = scrollbar_control_w, .bottom = @max(1, self.layout_h - scrollbar_margin * 2) };
+    if (self.scrollbar_hwnd) |hwnd| _ = GetClientRect(hwnd, &rect);
+
+    const track_h = @max(1, rect.bottom - rect.top);
+    const total_f: f32 = @floatFromInt(self.scrollbar.total);
+    const len_f: f32 = @floatFromInt(self.scrollbar.len);
+    const visible_ratio = if (self.scrollbar.total == 0) 1.0 else @min(1.0, len_f / total_f);
+    const thumb_h: i32 = @max(scrollbar_thumb_min_h, @as(i32, @intFromFloat(@as(f32, @floatFromInt(track_h)) * visible_ratio)));
+    const travel = @max(0, track_h - thumb_h);
+    const max_offset = self.maxScrollbarOffset();
+    const offset_ratio: f32 = if (max_offset == 0) 0.0 else @as(f32, @floatFromInt(self.scrollbar.offset)) / @as(f32, @floatFromInt(max_offset));
+    const top = rect.top + @as(i32, @intFromFloat(@as(f32, @floatFromInt(travel)) * @min(1.0, offset_ratio)));
+    const thumb_w = if (self.scrollbar_hovered or self.scrollbar_drag != null) scrollbar_hover_thumb_w else scrollbar_idle_thumb_w;
+    const right = rect.right - 2;
+    return .{
+        .left = @max(rect.left, right - thumb_w),
+        .top = top,
+        .right = right,
+        .bottom = @min(rect.bottom, top + thumb_h),
+    };
+}
+
+fn scrollbarDragTo(self: *Self, y: i32) void {
+    const drag = self.scrollbar_drag orelse return;
+    var rect: RECT = .{ .left = 0, .top = 0, .right = scrollbar_control_w, .bottom = @max(1, self.layout_h - scrollbar_margin * 2) };
+    if (self.scrollbar_hwnd) |hwnd| _ = GetClientRect(hwnd, &rect);
+    const thumb = self.scrollbarThumbRect();
+    const thumb_h = @max(1, thumb.bottom - thumb.top);
+    const travel = @max(1, (rect.bottom - rect.top) - thumb_h);
+    const raw_top = std.math.clamp(y - drag.grab_y - rect.top, 0, travel);
+    const ratio = @as(f32, @floatFromInt(raw_top)) / @as(f32, @floatFromInt(travel));
+    const target_f = ratio * @as(f32, @floatFromInt(self.maxScrollbarOffset()));
+    self.scrollbarApplyOffset(@intFromFloat(target_f + 0.5));
+}
+
+fn scrollbarResizeHit(self: *Self, lparam: isize) bool {
+    const window = self.window orelse return false;
+    const hit = window.hitTestPoint(signExtendLowWord(lparam), signExtendHighWord(lparam));
+    return window.isResizeHit(hit);
+}
+
+fn forwardResizeDrag(self: *Self, hwnd: HWND, lparam: isize) bool {
+    const window = self.window orelse return false;
+    const top_hwnd = window.hwnd orelse return false;
+    var pt: sys.POINT = .{ .x = lparamX(lparam), .y = lparamY(lparam) };
+    if (ClientToScreen(hwnd, &pt) == 0) return false;
+    const hit = window.hitTestPoint(pt.x, pt.y);
+    if (!window.isResizeHit(hit)) return false;
+    _ = ReleaseCapture();
+    _ = sys.SendMessageW(top_hwnd, sys.WM_NCLBUTTONDOWN, @intCast(hit), packMousePoint(pt.x, pt.y));
+    return true;
+}
+
+fn scrollbarApplyOffset(self: *Self, target: usize) void {
+    const offset = @min(target, self.maxScrollbarOffset());
+    if (offset == self.scrollbar.offset) return;
+    self.scrollbar.offset = offset;
+    self.invalidateScrollbar();
+    self.scrollToScrollbarOffset(offset);
+}
+
+fn maxScrollbarOffset(self: *const Self) usize {
+    if (self.scrollbar.total <= self.scrollbar.len) return 0;
+    return self.scrollbar.total - self.scrollbar.len;
+}
+
+fn lparamX(lparam: isize) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam))))));
+}
+
+fn lparamY(lparam: isize) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)) >> 16))));
+}
+
+fn wheelDelta(wparam: usize) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(wparam >> 16))));
+}
+
+fn signExtendLowWord(value: isize) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(value))))));
+}
+
+fn signExtendHighWord(value: isize) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(value)) >> 16))));
+}
+
+fn packMousePoint(x: i32, y: i32) isize {
+    const lo: u16 = @bitCast(@as(i16, @truncate(x)));
+    const hi: u16 = @bitCast(@as(i16, @truncate(y)));
+    const value: u32 = @as(u32, lo) | (@as(u32, hi) << 16);
+    return @bitCast(@as(usize, value));
 }
 
 pub fn setVisible(self: *Self, visible: bool) void {
     _ = ShowWindow(self.hwnd, if (visible) SW_SHOWNORMAL else SW_HIDE);
     if (self.progress_hwnd) |hwnd| {
         _ = ShowWindow(hwnd, if (visible and self.progress_visible) SW_SHOWNORMAL else SW_HIDE);
+    }
+    if (visible) {
+        self.updateScrollbarOverlayRect();
+    } else if (self.scrollbar_hwnd) |hwnd| {
+        _ = ShowWindow(hwnd, SW_HIDE);
     }
 }
 
