@@ -692,17 +692,8 @@ fn scrollbarControlRight(self: *const Self) i32 {
 }
 
 pub fn scrollbarResizeGutter(self: *const Self) i32 {
-    const window = self.window orelse return 0;
-    const gutter = window.rightResizeGutter();
-    if (gutter <= 0) return 0;
-
-    const top_hwnd = window.hwnd orelse return 0;
-    var rect: RECT = std.mem.zeroes(RECT);
-    if (GetClientRect(top_hwnd, &rect) == 0) return 0;
-
-    const surface_right = self.layout_x + if (self.layout_w > 0) self.layout_w else @as(i32, @intCast(self.width));
-    if (surface_right < rect.right - gutter) return 0;
-    return gutter;
+    _ = self;
+    return 0;
 }
 
 fn scrollToScrollbarOffset(self: *Self, target: usize) void {

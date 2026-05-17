@@ -2507,6 +2507,8 @@ pub fn hitTestPoint(self: *Window, x: i32, y: i32) LRESULT {
     const border_x = resizeBorderX();
     const border_y = resizeBorderY();
 
+    if (self.hitTestScrollbarScreenPoint(hwnd, x, y)) return sys.HTCLIENT;
+
     if (!self.fullscreen.active and sys.IsZoomed(hwnd) == 0) {
         const left = x >= rect.left and x < rect.left + border_x;
         const right = x < rect.right and x >= rect.right - border_x;
@@ -2522,8 +2524,6 @@ pub fn hitTestPoint(self: *Window, x: i32, y: i32) LRESULT {
         if (left) return sys.HTLEFT;
         if (right) return sys.HTRIGHT;
     }
-
-    if (self.hitTestScrollbarScreenPoint(hwnd, x, y)) return sys.HTCLIENT;
 
     if (y < rect.top + self.tabClientHeight()) {
         const button_area_left = rect.right - WINDOW_BUTTON_WIDTH * WINDOW_BUTTON_COUNT;
