@@ -39,6 +39,14 @@ visible: bool = true,
 search_matches: ?renderer.Message.SearchMatches = null,
 search_selected_match: ?renderer.Message.SearchMatch = null,
 search_matches_dirty: bool = false,
+last_cursor_blink: bool = true,
+frame_dirty: bool = true,
+    brush_cache: std.ArrayListUnmanaged(BrushCacheEntry) = .empty,
+
+    const BrushCacheEntry = struct {
+        color: d2d.D2D_COLOR_F,
+        brush: *d2d.ID2D1SolidColorBrush,
+    };
 
 pub const DerivedConfig = struct {
     arena: ArenaAllocator,
@@ -151,7 +159,7 @@ const CellColors = struct {
 };
 
 const TextLayoutCache = struct {
-    const max_entries = 512;
+    const max_entries = 256;
 
     entries: std.ArrayListUnmanaged(Entry) = .empty,
 
@@ -221,6 +229,8 @@ pub fn deinit(self: *Direct2D) void {
     self.links.deinit(self.alloc);
     self.text_buf.deinit(self.alloc);
     self.text_layout_cache.deinit(self.alloc);
+    for (self.brush_cache.items) |entry| releaseCom(entry.brush);
+    self.brush_cache.deinit(self.alloc);
     self.terminal_state.deinit(self.alloc);
     self.releaseDeviceResources();
     self.text_formats.release();
@@ -343,6 +353,12 @@ pub fn updateFrame(
         self.scrollbar_dirty = true;
     }
 
+    if (self.terminal_state.dirty != .false) self.frame_dirty = true;
+    if (cursor_blink_visible != self.last_cursor_blink) {
+        self.last_cursor_blink = cursor_blink_visible;
+        self.frame_dirty = true;
+    }
+
     self.terminal_state.dirty = .false;
 }
 
@@ -413,8 +429,9 @@ fn updateSearchHighlights(self: *Direct2D) Allocator.Error!void {
 }
 
 pub fn drawFrame(self: *Direct2D, sync: bool) !void {
-    _ = sync;
     if (!self.visible) return;
+    if (!sync and !self.frame_dirty) return;
+    self.frame_dirty = false;
 
     try self.ensureTarget();
     const target = self.target orelse return;
@@ -426,6 +443,8 @@ pub fn drawFrame(self: *Direct2D, sync: bool) !void {
         }, .instant) > 0) self.scrollbar_dirty = false;
     };
 
+    for (self.brush_cache.items) |entry| releaseCom(entry.brush);
+    self.brush_cache.clearRetainingCapacity();
     render_target.BeginDraw();
     self.clear(render_target);
     self.drawCells(render_target) catch |err| {
@@ -449,6 +468,11 @@ pub fn drawFrame(self: *Direct2D, sync: bool) !void {
     if (d2d.failed(hr)) {
         self.releaseDeviceResources();
         log.warn("Direct2D EndDraw failed hr=0x{x}", .{@as(u32, @bitCast(hr))});
+    }
+
+    // Shrink text_buf if it grew too large from a single long grapheme run.
+    if (self.text_buf.capacity > 256) {
+        self.text_buf.shrinkAndFree(self.alloc, 0);
     }
 }
 
@@ -496,7 +520,7 @@ fn ensureTarget(self: *Direct2D) !void {
         },
         .presentOptions = .{
             .RETAIN_CONTENTS = 0,
-            .IMMEDIATELY = 1,
+            .IMMEDIATELY = 0,
         },
     };
 
@@ -656,7 +680,7 @@ fn drawScrollbar(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
         .right = track_right,
         .bottom = screen_h,
     };
-    try fillRectangle(target, &track, .{ .r = 0.18, .g = 0.18, .b = 0.18, .a = 0.52 });
+    try self.fillRectangle(target, &track, .{ .r = 0.18, .g = 0.18, .b = 0.18, .a = 0.52 });
 
     const track_h = @max(1.0, screen_h - margin * 2.0);
     const visible_ratio = @min(1.0, @as(f32, @floatFromInt(self.scrollbar.len)) / @as(f32, @floatFromInt(self.scrollbar.total)));
@@ -672,7 +696,7 @@ fn drawScrollbar(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
         .bottom = @min(screen_h - margin, top + thumb_h),
     };
     const thumb_alpha: f32 = if (hovered) 0.92 else 0.72;
-    try fillRectangle(target, &thumb, .{ .r = 0.86, .g = 0.86, .b = 0.86, .a = thumb_alpha });
+    try self.fillRectangle(target, &thumb, .{ .r = 0.86, .g = 0.86, .b = 0.86, .a = thumb_alpha });
 }
 
 fn selectedKind(
@@ -902,7 +926,7 @@ fn drawCells(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
 
             if (colors.bg) |bg| {
                 const bg_color = colorF(bg, colors.bg_alpha);
-                try fillRectangle(target, &rect, bg_color);
+                try self.fillRectangle(target, &rect, bg_color);
             }
 
             if (!cell.hasText()) continue;
@@ -922,15 +946,13 @@ fn drawCells(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
                 break :underline style.flags.underline;
             };
 
-            if (underline != .none) try drawUnderline(
-                target,
+            if (underline != .none) try self.drawUnderline(target,
                 rect,
                 underline,
                 colorF(style.underlineColor(palette) orelse colors.fg, colors.fg_alpha),
                 cell_h,
             );
-            if (style.flags.overline) try drawLineRect(
-                target,
+            if (style.flags.overline) try self.drawLineRect(target,
                 .{ .left = rect.left, .top = rect.top, .right = rect.right, .bottom = rect.top + lineThickness(cell_h) },
                 colorF(colors.fg, colors.fg_alpha),
             );
@@ -944,8 +966,7 @@ fn drawCells(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
                     .bottom = rect.bottom,
                 };
                 const text_format = self.text_formats.get(style) orelse return error.DirectWriteTextFormatUnavailable;
-                try drawText(
-                    target,
+                try self.drawText(target,
                     run_text.ptr,
                     @intCast(run_text.len),
                     text_format,
@@ -977,8 +998,7 @@ fn drawCells(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
                 );
             } else {
                 const text_rect = rect;
-                try drawText(
-                    target,
+                try self.drawText(target,
                     text.ptr,
                     @intCast(text.len),
                     text_format,
@@ -988,8 +1008,7 @@ fn drawCells(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
                 );
             }
 
-            if (style.flags.strikethrough) try drawLineRect(
-                target,
+            if (style.flags.strikethrough) try self.drawLineRect(target,
                 .{
                     .left = rect.left,
                     .top = rect.top + cell_h * 0.55,
@@ -1081,12 +1100,12 @@ fn drawCursor(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
 
     const color = colorF(cursor_rgb, @floatCast(self.config.cursor_opacity));
     switch (cursor_style) {
-        .block_hollow => try drawRectangle(target, &rect, color, 1.0),
+        .block_hollow => try self.drawRectangle(target, &rect, color, 1.0),
         .block,
         .bar,
         .underline,
         .lock,
-        => try fillRectangle(target, &rect, color),
+        => try self.fillRectangle(target, &rect, color),
     }
 
     if (cursor_style == .lock) {
@@ -1094,8 +1113,7 @@ fn drawCursor(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
         const format = (if (cellTextHasEmoji(text)) self.text_formats.emoji else self.text_formats.regular) orelse
             return error.DirectWriteTextFormatUnavailable;
         const text_rect = expandedTextRect(rect, cell_w, cell_h);
-        try drawText(
-            target,
+        try self.drawText(target,
             text.ptr,
             @intCast(text.len),
             format,
@@ -1122,7 +1140,7 @@ fn drawCursor(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
             );
         } else {
             const text_rect = rect;
-            try drawText(target, text.ptr, @intCast(text.len), format, &text_rect, colorF(text_color, 1.0), true);
+            try self.drawText(target, text.ptr, @intCast(text.len), format, &text_rect, colorF(text_color, 1.0), true);
         }
     }
 }
@@ -1161,8 +1179,7 @@ fn drawPreedit(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
             );
         } else {
             const text_rect = rect;
-            try drawText(
-                target,
+            try self.drawText(target,
                 text.ptr,
                 @intCast(text.len),
                 text_format,
@@ -1171,8 +1188,7 @@ fn drawPreedit(self: *Direct2D, target: *d2d.ID2D1RenderTarget) !void {
                 true,
             );
         }
-        try drawUnderline(
-            target,
+        try self.drawUnderline(target,
             rect,
             .single,
             colorF(self.terminal_state.colors.foreground, 1.0),
@@ -1289,41 +1305,39 @@ fn colorF(rgb: terminal.color.RGB, opacity: f32) d2d.D2D_COLOR_F {
     };
 }
 
-fn fillRectangle(
+fn fillRectangle(self: *Direct2D,
     target: *d2d.ID2D1RenderTarget,
     rect: *const d2d.D2D_RECT_F,
     color: d2d.D2D_COLOR_F,
 ) !void {
-    const brush = try solidColorBrush(target, color);
-    defer releaseCom(brush);
+    const brush = try self.solidColorBrush(target, color);
 
     const brush_base: *d2d.ID2D1Brush = @ptrCast(brush);
     target.FillRectangle(rect, brush_base);
 }
 
-fn drawRectangle(
+fn drawRectangle(self: *Direct2D,
     target: *d2d.ID2D1RenderTarget,
     rect: *const d2d.D2D_RECT_F,
     color: d2d.D2D_COLOR_F,
     stroke_width: f32,
 ) !void {
-    const brush = try solidColorBrush(target, color);
-    defer releaseCom(brush);
+    const brush = try self.solidColorBrush(target, color);
 
     const brush_base: *d2d.ID2D1Brush = @ptrCast(brush);
     target.DrawRectangle(rect, brush_base, stroke_width);
 }
 
-fn drawLineRect(
+fn drawLineRect(self: *Direct2D,
     target: *d2d.ID2D1RenderTarget,
     rect: d2d.D2D_RECT_F,
     color: d2d.D2D_COLOR_F,
 ) !void {
     var mutable = rect;
-    try fillRectangle(target, &mutable, color);
+    try self.fillRectangle(target, &mutable, color);
 }
 
-fn drawUnderline(
+fn drawUnderline(self: *Direct2D,
     target: *d2d.ID2D1RenderTarget,
     rect: d2d.D2D_RECT_F,
     style: terminal.Attribute.Underline,
@@ -1334,20 +1348,20 @@ fn drawUnderline(
     const bottom = rect.bottom - thickness;
     switch (style) {
         .none => {},
-        .single => try drawLineRect(target, .{
+        .single => try self.drawLineRect(target, .{
             .left = rect.left,
             .top = bottom,
             .right = rect.right,
             .bottom = rect.bottom,
         }, color),
         .double => {
-            try drawLineRect(target, .{
+            try self.drawLineRect(target, .{
                 .left = rect.left,
                 .top = bottom,
                 .right = rect.right,
                 .bottom = rect.bottom,
             }, color);
-            try drawLineRect(target, .{
+            try self.drawLineRect(target, .{
                 .left = rect.left,
                 .top = bottom - thickness * 2,
                 .right = rect.right,
@@ -1365,7 +1379,7 @@ fn drawUnderline(
                     .right = @min(x + dot, rect.right),
                     .bottom = rect.bottom,
                 };
-                try fillRectangle(target, &dot_rect, color);
+                try self.fillRectangle(target, &dot_rect, color);
             }
         },
         .dashed => {
@@ -1379,7 +1393,7 @@ fn drawUnderline(
                     .right = @min(x + dash, rect.right),
                     .bottom = rect.bottom,
                 };
-                try fillRectangle(target, &dash_rect, color);
+                try self.fillRectangle(target, &dash_rect, color);
             }
         },
         .curly => {
@@ -1397,13 +1411,13 @@ fn drawUnderline(
                     .right = @min(x + step, rect.right),
                     .bottom = y + thickness,
                 };
-                try fillRectangle(target, &wave_rect, color);
+                try self.fillRectangle(target, &wave_rect, color);
             }
         },
     }
 }
 
-fn drawText(
+fn drawText(self: *Direct2D,
     target: *d2d.ID2D1RenderTarget,
     text: [*:0]const u16,
     text_len: u32,
@@ -1412,8 +1426,7 @@ fn drawText(
     color: d2d.D2D_COLOR_F,
     expanded: bool,
 ) !void {
-    const brush = try solidColorBrush(target, color);
-    defer releaseCom(brush);
+    const brush = try self.solidColorBrush(target, color);
 
     const brush_base: *d2d.ID2D1Brush = @ptrCast(brush);
     target.DrawText(
@@ -1438,8 +1451,7 @@ fn drawTextLayoutCached(
     color: d2d.D2D_COLOR_F,
 ) !void {
     const entry = try self.getTextLayout(format, text);
-    const brush = try solidColorBrush(target, color);
-    defer releaseCom(brush);
+    const brush = try self.solidColorBrush(target, color);
 
     const brush_base: *d2d.ID2D1Brush = @ptrCast(brush);
     const origin: d2d.D2D_POINT_2F = .{
@@ -1502,14 +1514,18 @@ fn lineThickness(cell_h: f32) f32 {
     return @max(1.0, @round(cell_h / 14.0));
 }
 
-fn solidColorBrush(
+fn solidColorBrush(self: *Direct2D,
     target: *d2d.ID2D1RenderTarget,
     color: d2d.D2D_COLOR_F,
 ) !*d2d.ID2D1SolidColorBrush {
+    for (self.brush_cache.items) |entry| {
+        if (std.meta.eql(entry.color, color)) return entry.brush;
+    }
     var mutable_color = color;
     var brush: *d2d.ID2D1SolidColorBrush = undefined;
     const hr = target.CreateSolidColorBrush(&mutable_color, &brush);
     if (d2d.failed(hr)) return error.Direct2DBrushUnavailable;
+    try self.brush_cache.append(self.alloc, .{ .color = color, .brush = brush });
     return brush;
 }
 
