@@ -259,6 +259,18 @@ pub extern "dwmapi" fn DwmSetWindowAttribute(
     cbAttribute: DWORD,
 ) callconv(.winapi) i32;
 
+pub const MARGINS = extern struct {
+    cxLeftWidth: c_int,
+    cxRightWidth: c_int,
+    cyTopHeight: c_int,
+    cyBottomHeight: c_int,
+};
+
+pub extern "dwmapi" fn DwmExtendFrameIntoClientArea(
+    hwnd: HWND,
+    pMarInset: *const MARGINS,
+) callconv(.winapi) i32;
+
 pub const ACCENT_STATE = enum(i32) {
     disabled = 0,
     enable_gradient = 1,
@@ -273,6 +285,7 @@ pub fn accentStateForBlur(blur: anytype) ACCENT_STATE {
         .acrylic => .enable_acrylicblurbehind,
         .mica, .@"mica-alt" => .enable_hostbackdrop,
         .true => .enable_blurbehind,
+        .transparent => .enable_transparent_gradient,
         else => .disabled,
     };
 }
@@ -304,10 +317,22 @@ pub extern "user32" fn SetWindowCompositionAttribute(
 ) callconv(.winapi) BOOL;
 
 pub fn setAccentPolicy(hwnd: HWND, state: ACCENT_STATE, opacity: f64, tint: ?AccentTint) void {
+    // enable_hostbackdrop (Mica) needs fully-transparent tint so the
+    // DWM-rendered host backdrop (wallpaper / Mica material) is visible.
+    // A solid colour here would paint over the material and show black.
+    // AccentFlags = 0 is required for hostbackdrop; = 2 is for acrylic blur.
+    const gradient_color: u32 = switch (state) {
+        .enable_hostbackdrop => 0,
+        else => acrylicGradientColor(opacity, tint),
+    };
+    const accent_flags: DWORD = switch (state) {
+        .enable_hostbackdrop => 0,
+        else => 2,
+    };
     var accent: ACCENT_POLICY = .{
         .AccentState = state,
-        .AccentFlags = 2,
-        .GradientColor = acrylicGradientColor(opacity, tint),
+        .AccentFlags = accent_flags,
+        .GradientColor = gradient_color,
         .AnimationId = 0,
     };
     var data: WINDOWCOMPOSITIONATTRIBDATA = .{

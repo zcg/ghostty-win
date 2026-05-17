@@ -250,9 +250,19 @@ pub fn init(self: *Self, parent: HWND, app: *App) !void {
 
 pub fn applyBackgroundEffect(self: *Self) void {
     const app = self.app orelse return;
+    const window = self.window orelse return;
+    const blur = app.config.@"background-blur";
+    if (blur == .false) {
+        sys.setAccentPolicy(self.hwnd, .disabled, 0, .{ .r = 0, .g = 0, .b = 0 });
+        return;
+    }
+    if (window.dwm_backdrop_supported and blur != .transparent) {
+        sys.setAccentPolicy(self.hwnd, .disabled, 0, .{ .r = 0, .g = 0, .b = 0 });
+        return;
+    }
     sys.setAccentPolicy(
         self.hwnd,
-        sys.accentStateForBlur(app.config.@"background-blur"),
+        sys.accentStateForBlur(blur),
         app.config.@"background-opacity",
         .{
             .r = app.config.background.r,

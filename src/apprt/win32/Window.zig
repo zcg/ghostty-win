@@ -471,6 +471,7 @@ const TitleBarState = struct {
         const bar_bg = blendColor(window.app.config.background, window.app.config.foreground, 0.12);
         const bg_alpha: f32 = switch (window.app.config.@"background-blur") {
             .acrylic, .mica, .@"mica-alt", .true => 0.22,
+            .false, .transparent => 0.92,
             else => 0.92,
         };
         const bg_brush = try d2dBrush(target, d2dColor(bar_bg, bg_alpha));
@@ -771,6 +772,9 @@ drag: ?DividerDrag = null,
 in_window_resize: bool = false,
 pending_core_resize: bool = false,
 pending_window_relayout: bool = false,
+/// Tracks whether DWMWA_SYSTEMBACKDROP_TYPE is supported on this OS.
+/// When false (e.g. Windows 10), we fall back to SetWindowCompositionAttribute.
+dwm_backdrop_supported: bool = true,
 
 const FullscreenState = struct {
     active: bool = false,
@@ -873,6 +877,39 @@ fn createHwnd(self: *Window, title_override: ?[:0]const u8) !void {
 pub fn applyWindowEffects(self: *Window) void {
     const hwnd = self.hwnd orelse return;
 
+    // Clear any lingering SetWindowCompositionAttribute state before
+    // applying new effects. The accent policy is sticky across calls.
+    sys.setAccentPolicy(
+        hwnd,
+        .disabled,
+        0,
+        .{ .r = 0, .g = 0, .b = 0 },
+    );
+
+    // Extend DWM frame into client area so DWM renders backdrop behind
+    // the entire window. Required for all Fluent Design effects.
+    // When disabling, reset margins to 0 so DWM stops drawing glass.
+    switch (self.app.config.@"background-blur") {
+        .true, .acrylic, .mica, .@"mica-alt" => {
+            const margins: sys.MARGINS = .{
+                .cxLeftWidth = -1,
+                .cxRightWidth = -1,
+                .cyTopHeight = -1,
+                .cyBottomHeight = -1,
+            };
+            _ = sys.DwmExtendFrameIntoClientArea(hwnd, &margins);
+        },
+        else => {
+            const margins: sys.MARGINS = .{
+                .cxLeftWidth = 0,
+                .cxRightWidth = 0,
+                .cyTopHeight = 0,
+                .cyBottomHeight = 0,
+            };
+            _ = sys.DwmExtendFrameIntoClientArea(hwnd, &margins);
+        },
+    }
+
     const dark_mode: u32 = switch (self.app.config.@"window-theme") {
         .dark => 1,
         .light => 0,
@@ -889,17 +926,34 @@ pub fn applyWindowEffects(self: *Window) void {
     );
 
     const backdrop: sys.DWM_SYSTEMBACKDROP_TYPE = switch (self.app.config.@"background-blur") {
-        .acrylic => .transient_window,
+        .true, .acrylic => .transient_window,
         .mica => .main_window,
         .@"mica-alt" => .tabbed_window,
         else => .none,
     };
-    _ = sys.DwmSetWindowAttribute(
+    const result = sys.DwmSetWindowAttribute(
         hwnd,
         sys.DWMWA_SYSTEMBACKDROP_TYPE,
         &backdrop,
         @sizeOf(@TypeOf(backdrop)),
     );
+    if (result == 0) {
+        self.dwm_backdrop_supported = true;
+    } else {
+        // DWMWA_SYSTEMBACKDROP_TYPE not supported (Windows 10 or older).
+        // Keep the extended frame and fall back to SetWindowCompositionAttribute.
+        self.dwm_backdrop_supported = false;
+        sys.setAccentPolicy(
+            hwnd,
+            sys.accentStateForBlur(self.app.config.@"background-blur"),
+            self.app.config.@"background-opacity",
+            .{
+                .r = self.app.config.background.r,
+                .g = self.app.config.background.g,
+                .b = self.app.config.background.b,
+            },
+        );
+    }
 
     const corner: sys.DWM_WINDOW_CORNER_PREFERENCE = .round;
     _ = sys.DwmSetWindowAttribute(
@@ -939,25 +993,12 @@ pub fn applyWindowEffects(self: *Window) void {
         @sizeOf(@TypeOf(text_color)),
     );
 
-    sys.setAccentPolicy(
-        hwnd,
-        sys.accentStateForBlur(self.app.config.@"background-blur"),
-        self.app.config.@"background-opacity",
-        .{
-            .r = self.app.config.background.r,
-            .g = self.app.config.background.g,
-            .b = self.app.config.background.b,
-        },
-    );
-    self.applyTitleBarEffects();
-    self.applySurfaceWindowEffects();
-}
-
-fn applyTitleBarEffects(self: *Window) void {
-    if (self.title_bar) |bar| {
+    // Pure transparency (no blur) uses SetWindowCompositionAttribute
+    // directly rather than DWM backdrop API.
+    if (self.app.config.@"background-blur" == .transparent) {
         sys.setAccentPolicy(
-            bar.hwnd,
-            sys.accentStateForBlur(self.app.config.@"background-blur"),
+            hwnd,
+            .enable_transparent_gradient,
             self.app.config.@"background-opacity",
             .{
                 .r = self.app.config.background.r,
@@ -965,6 +1006,34 @@ fn applyTitleBarEffects(self: *Window) void {
                 .b = self.app.config.background.b,
             },
         );
+    }
+
+    self.applyTitleBarEffects();
+    self.applySurfaceWindowEffects();
+}
+
+fn applyTitleBarEffects(self: *Window) void {
+    if (self.title_bar) |bar| {
+        const blur = self.app.config.@"background-blur";
+        if (blur != .false and (!self.dwm_backdrop_supported or blur == .transparent)) {
+            sys.setAccentPolicy(
+                bar.hwnd,
+                sys.accentStateForBlur(blur),
+                self.app.config.@"background-opacity",
+                .{
+                    .r = self.app.config.background.r,
+                    .g = self.app.config.background.g,
+                    .b = self.app.config.background.b,
+                },
+            );
+        } else {
+            sys.setAccentPolicy(
+                bar.hwnd,
+                .disabled,
+                0,
+                .{ .r = 0, .g = 0, .b = 0 },
+            );
+        }
         _ = sys.InvalidateRect(bar.hwnd, null, 0);
     }
 }

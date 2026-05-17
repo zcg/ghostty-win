@@ -613,6 +613,7 @@ fn clear(self: *Direct2D, target: *d2d.ID2D1RenderTarget) void {
 fn usesTransparentBackground(self: *const Direct2D) bool {
     return self.config.background_opacity < 1.0 or switch (self.config.background_blur) {
         .false => false,
+        .transparent => true,
         else => true,
     };
 }
@@ -622,6 +623,8 @@ fn backgroundClearOpacity(self: *const Direct2D) f32 {
     const opacity: f32 = @floatCast(self.config.background_opacity);
     return switch (self.config.background_blur) {
         .false => opacity,
+        .transparent => opacity,
+        .mica, .@"mica-alt" => 0.0, // Mica needs fully transparent background
         else => @max(0.08, opacity * 0.35),
     };
 }

@@ -9680,6 +9680,7 @@ pub const AutoUpdate = enum {
 pub const BackgroundBlur = union(enum) {
     false,
     true,
+    transparent,
     @"macos-glass-regular",
     @"macos-glass-clear",
     acrylic,
@@ -9688,6 +9689,7 @@ pub const BackgroundBlur = union(enum) {
     radius: u8,
 
     pub fn parseCLI(self: *BackgroundBlur, input: ?[]const u8) !void {
+        comptime { @setEvalBranchQuota(2000); }
         const input_ = input orelse {
             // Emulate behavior for bools
             self.* = .true;
@@ -9762,6 +9764,7 @@ pub const BackgroundBlur = union(enum) {
         switch (self) {
             .false => try formatter.formatEntry(bool, false),
             .true => try formatter.formatEntry(bool, true),
+            .transparent => try formatter.formatEntry([]const u8, "transparent"),
             .radius => |v| try formatter.formatEntry(u8, v),
             .@"macos-glass-regular" => try formatter.formatEntry([]const u8, "macos-glass-regular"),
             .@"macos-glass-clear" => try formatter.formatEntry([]const u8, "macos-glass-clear"),
