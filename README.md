@@ -1,226 +1,188 @@
-<!-- LOGO -->
-<h1>
-<p align="center">
+<h1 align="center">
   <img src="https://github.com/user-attachments/assets/fe853809-ba8b-400b-83ab-a9a0da25be8a" alt="Logo" width="128">
-  <br>Ghostty
+  <br>Ghostty for Windows
 </h1>
-  <p align="center">
-    Fast, native, feature-rich terminal emulator pushing modern features.
-    <br />
-    A native GUI or embeddable library via <code>libghostty</code>.
-    <br />
-    <a href="#about">About</a>
-    ·
-    <a href="https://ghostty.org/download">Download</a>
-    ·
-    <a href="https://ghostty.org/docs">Documentation</a>
-    ·
-    <a href="CONTRIBUTING.md">Contributing</a>
-    ·
-    <a href="HACKING.md">Developing</a>
-  </p>
+
+<p align="center">
+  <b>Ghostty 终端模拟器的 Windows 原生移植版</b>
+  <br>
+  基于 Win32 API + Direct2D/D3D11 的高性能原生终端
+  <br><br>
+  <a href="#build">构建指南</a>
+  ·
+  <a href="#status">当前状态</a>
+  ·
+  <a href="#features">功能特性</a>
+  ·
+  <a href="#contributing">贡献指南</a>
 </p>
 
-## About
+---
 
-Ghostty is a terminal emulator that differentiates itself by being
-fast, feature-rich, and native. While there are many excellent terminal
-emulators available, they all force you to choose between speed,
-features, or native UIs. Ghostty provides all three.
+## 简介
 
-**`libghostty`** is a cross-platform, zero-dependency C and Zig library
-for building terminal emulators or utilizing terminal functionality
-(such as style parsing). Anyone can use `libghostty` to build a terminal
-emulator or embed a terminal into their own applications. See
-[Ghostling](https://github.com/ghostty-org/ghostling) for a minimal complete project
-example or the [`examples` directory](https://github.com/ghostty-org/ghostty/tree/main/example)
-for smaller examples of using `libghostty` in C and Zig.
+本项目是 [Ghostty](https://ghostty.org/) 终端模拟器的 **Windows 原生移植版**。Ghostty 以"快速、功能丰富、原生体验"著称，但官方目前仅支持 macOS 和 Linux。本项目填补了 Windows 平台的空白，让 Windows 用户也能体验到 Ghostty 的强大功能。
 
-For more details, see [About Ghostty](https://ghostty.org/docs/about).
+与 WSL 中运行 Linux 版 Ghostty 不同，这是一个**真正的原生 Windows 应用**：
+- 基于 Win32 API 构建，不是 GTK/Qt/Electron
+- 使用 Direct2D / D3D11 硬件加速渲染
+- 集成 Windows ConPTY 作为终端后端
+- 支持 Windows 原生输入法、AltGr、Emoji 等
 
-## Download
+## 当前状态
 
-See the [download page](https://ghostty.org/download) on the Ghostty website.
+| 功能 | 状态 |
+|------|:----:|
+| 终端模拟（VT 序列、ConPTY） | ✅ |
+| 多标签页（Tabs） | ✅ |
+| 分屏（Split Panes） | ✅ |
+| Direct2D 硬件加速渲染 | ✅ |
+| D3D11 硬件加速渲染 | ✅ |
+| DirectWrite 字体 + HarfBuzz 字形 | ✅ |
+| Emoji / CJK / 字体回退链 | ✅ |
+| 自定义标题栏（Custom Chrome） | ✅ |
+| Acrylic / Mica 背景模糊 | ✅ |
+| 搜索面板（Search Panel） | ✅ |
+| 命令面板（Command Palette） | ✅ |
+| 深色/浅色模式 | ✅ |
+| 配置系统（ghostty config） | ✅ |
+| 安装程序 / 自动更新 | ❌ |
 
-## Documentation
+> ⚠️ **注意**：项目仍在活跃开发中，部分功能可能不够稳定。欢迎提交 Issue 和 PR。
 
-See the [documentation](https://ghostty.org/docs) on the Ghostty website.
+## 功能特性
 
-## Contributing and Developing
+### 原生 Win32 体验
+- 真正的 Win32 窗口系统，不是跨平台 GUI 框架的妥协
+- 自定义标题栏支持最大化/最小化/关闭，拖动从最大化状态恢复
+- 支持 Windows 11 的 Acrylic 和 Mica 背景效果
+- 沉浸式深色模式（DWMWA_USE_IMMERSIVE_DARK_MODE）
 
-If you have any ideas, issues, etc. regarding Ghostty, or would like to
-contribute to Ghostty through pull requests, please check out our
-["Contributing to Ghostty"](CONTRIBUTING.md) document. Those who would like
-to get involved with Ghostty's development as well should also read the
-["Developing Ghostty"](HACKING.md) document for more technical details.
+### 高性能渲染
+- **Direct2D 渲染器**：稳定、兼容性好，适合日常使用
+- **D3D11 渲染器**：更低延迟，支持更复杂的视觉效果
+- 字体渲染使用 DirectWrite + HarfBuzz，支持连字（ligatures）
+- 完整的字体回退链：英文字体 → CJK 字体 → Segoe UI Emoji
 
-## Roadmap and Status
+### 完整的终端功能
+- Kitty 图形协议、图片协议
+- 同步渲染、剪贴板序列
+- 亮色/暗色模式通知
+- 可配置的颜色主题（兼容 iTerm2 主题格式）
 
-Ghostty is stable and in use by millions of people and machines daily.
+## 构建指南
 
-The high-level ambitious plan for the project, in order:
+### 前置要求
 
-|  #  | Step                                                    | Status |
-| :-: | ------------------------------------------------------- | :----: |
-|  1  | Standards-compliant terminal emulation                  |   ✅   |
-|  2  | Competitive performance                                 |   ✅   |
-|  3  | Rich windowing features -- multi-window, tabbing, panes |   ✅   |
-|  4  | Native Platform Experiences                             |   ✅   |
-|  5  | Cross-platform `libghostty` for Embeddable Terminals    |   ✅   |
-|  6  | Ghostty-only Terminal Control Sequences                 |   ❌   |
+- **Zig** `0.15.2` 或更高版本（[下载地址](https://ziglang.org/download/)）
+- **Windows 10/11**（64位）
+- **Git**
 
-Additional details for each step in the big roadmap below:
+### 快速构建
 
-#### Standards-Compliant Terminal Emulation
+```powershell
+# 克隆仓库
+git clone https://github.com/zcg/ghostty-win.git
+cd ghostty-win
 
-Ghostty implements all of the regularly used control sequences and
-can run every mainstream terminal program without issue. For legacy sequences,
-we've done a [comprehensive xterm audit](https://github.com/ghostty-org/ghostty/issues/632)
-comparing Ghostty's behavior to xterm and building a set of conformance
-test cases.
+# 构建（Debug 模式）
+zig build -Dtarget=x86_64-windows
 
-In addition to legacy sequences (what you'd call real "terminal" emulation),
-Ghostty also supports more modern sequences than almost any other terminal
-emulator. These features include things like the Kitty graphics protocol,
-Kitty image protocol, clipboard sequences, synchronized rendering,
-light/dark mode notifications, and many, many more.
-
-We believe Ghostty is one of the most compliant and feature-rich terminal
-emulators available.
-
-Terminal behavior is partially a de jure standard
-(i.e. [ECMA-48](https://ecma-international.org/publications-and-standards/standards/ecma-48/))
-but mostly a de facto standard as defined by popular terminal emulators
-worldwide. Ghostty takes the approach that our behavior is defined by
-(1) standards, if available, (2) xterm, if the feature exists, (3)
-other popular terminals, in that order. This defines what the Ghostty project
-views as a "standard."
-
-#### Competitive Performance
-
-Ghostty is generally in the same performance category as the other highest
-performing terminal emulators.
-
-"The same performance category" means that Ghostty is much faster than
-traditional or "slow" terminals and is within an unnoticeable margin of the
-well-known "fast" terminals. For example, Ghostty and Alacritty are usually within
-a few percentage points of each other on various benchmarks, but are both
-something like 100x faster than Terminal.app and iTerm. However, Ghostty
-is much more feature rich than Alacritty and has a much more native app
-experience.
-
-This performance is achieved through high-level architectural decisions and
-low-level optimizations. At a high-level, Ghostty has a multi-threaded
-architecture with a dedicated read thread, write thread, and render thread
-per terminal. Our renderer uses OpenGL on Linux and Metal on macOS.
-Our read thread has a heavily optimized terminal parser that leverages
-CPU-specific SIMD instructions. Etc.
-
-#### Rich Windowing Features
-
-The Mac and Linux (build with GTK) apps support multi-window, tabbing, and
-splits with additional features such as tab renaming, coloring, etc. These
-features allow for a higher degree of organization and customization than
-single-window terminals.
-
-#### Native Platform Experiences
-
-Ghostty is a cross-platform terminal emulator but we don't aim for a
-least-common-denominator experience. There is a large, shared core written
-in Zig but we do a lot of platform-native things:
-
-- The macOS app is a true SwiftUI-based application with all the things you
-  would expect such as real windowing, menu bars, a settings GUI, etc.
-- macOS uses a true Metal renderer with CoreText for font discovery.
-- macOS supports AppleScript, Apple Shortcuts (AppIntents), etc.
-- The Linux app is built with GTK.
-- The Linux app integrates deeply with systemd if available for things
-  like always-on, new windows in a single instance, cgroup isolation, etc.
-
-Our goal with Ghostty is for users of whatever platform they run Ghostty
-on to think that Ghostty was built for their platform first and maybe even
-exclusively. We want Ghostty to feel like a native app on every platform,
-for the best definition of "native" on each platform.
-
-#### Cross-platform `libghostty` for Embeddable Terminals
-
-In addition to being a standalone terminal emulator, Ghostty is a
-C-compatible library for embedding a fast, feature-rich terminal emulator
-in any 3rd party project. This library is called `libghostty`.
-
-Due to the scope of this project, we're breaking libghostty down into
-separate libraries, starting with `libghostty-vt`. The goal of
-this project is to focus on parsing terminal sequences and maintaining
-terminal state. This is covered in more detail in this
-[blog post](https://mitchellh.com/writing/libghostty-is-coming).
-
-`libghostty-vt` is already available and usable today for Zig and C and
-is compatible for macOS, Linux, Windows, and WebAssembly. The functionality
-is extremely stable (since its been proven in Ghostty GUI for a long time),
-but the API signatures are still in flux.
-
-`libghostty` is already heavily in use. See [`examples`](https://github.com/ghostty-org/ghostty/tree/main/example)
-for small examples of using `libghostty` in C and Zig or the
-[Ghostling](https://github.com/ghostty-org/ghostling) project for a
-complete example. See [awesome-libghostty](https://github.com/Uzaaft/awesome-libghostty)
-for a list of projects and resources related to `libghostty`.
-
-We haven't tagged libghostty with a version yet and we're still working
-on a better docs experience, but our [Doxygen website](https://libghostty.tip.ghostty.org/)
-is a good resource for the C API.
-
-#### Ghostty-only Terminal Control Sequences
-
-We want and believe that terminal applications can and should be able
-to do so much more. We've worked hard to support a wide variety of modern
-sequences created by other terminal emulators towards this end, but we also
-want to fill the gaps by creating our own sequences.
-
-We've been hesitant to do this up until now because we don't want to create
-more fragmentation in the terminal ecosystem by creating sequences that only
-work in Ghostty. But, we do want to balance that with the desire to push the
-terminal forward with stagnant standards and the slow pace of change in the
-terminal ecosystem.
-
-We haven't done any of this yet.
-
-## Crash Reports
-
-Ghostty has a built-in crash reporter that will generate and save crash
-reports to disk. The crash reports are saved to the `$XDG_STATE_HOME/ghostty/crash`
-directory. If `$XDG_STATE_HOME` is not set, the default is `~/.local/state`.
-**Crash reports are _not_ automatically sent anywhere off your machine.**
-
-Crash reports are only generated the next time Ghostty is started after a
-crash. If Ghostty crashes and you want to generate a crash report, you must
-restart Ghostty at least once. You should see a message in the log that a
-crash report was generated.
-
-> [!NOTE]
->
-> Use the `ghostty +crash-report` CLI command to get a list of available crash
-> reports. A future version of Ghostty will make the contents of the crash
-> reports more easily viewable through the CLI and GUI.
-
-Crash reports end in the `.ghosttycrash` extension. The crash reports are in
-[Sentry envelope format](https://develop.sentry.dev/sdk/envelopes/). You can
-upload these to your own Sentry account to view their contents, but the format
-is also publicly documented so any other available tools can also be used.
-The `ghostty +crash-report` CLI command can be used to list any crash reports.
-A future version of Ghostty will show you the contents of the crash report
-directly in the terminal.
-
-To send the crash report to the Ghostty project, you can use the following
-CLI command using the [Sentry CLI](https://docs.sentry.io/cli/installation/):
-
-```shell-session
-SENTRY_DSN=https://e914ee84fd895c4fe324afa3e53dac76@o4507352570920960.ingest.us.sentry.io/4507850923638784 sentry-cli send-envelope --raw <path to ghostty crash>
+# 构建（Release 模式，推荐）
+zig build -Dtarget=x86_64-windows -Doptimize=ReleaseFast
 ```
 
-> [!WARNING]
->
-> The crash report can contain sensitive information. The report doesn't
-> purposely contain sensitive information, but it does contain the full
-> stack memory of each thread at the time of the crash. This information
-> is used to rebuild the stack trace but can also contain sensitive data
-> depending on when the crash occurred.
+构建完成后，可执行文件位于 `zig-out/bin/ghostty.exe`。
+
+### 运行
+
+```powershell
+.\zig-out\bin\ghostty.exe
+```
+
+首次运行会自动创建默认配置文件在 `%LOCALAPPDATA%\ghostty\config`。
+
+### 配置示例
+
+```
+# 字体设置
+font-family = "JetBrainsMono Nerd Font", "Microsoft YaHei"
+font-size = 12
+
+# 主题
+theme = "Catppuccin Mocha"
+
+# 背景模糊（Windows 11）
+background-blur = true
+background-blur-effect = "acrylic"
+
+# 窗口设置
+window-padding-x = 4
+window-padding-y = 4
+```
+
+## 项目结构
+
+```
+src/
+├── apprt/win32/          # Win32 应用运行时
+│   ├── App.zig           # 应用主循环
+│   ├── Window.zig        # 窗口管理
+│   ├── Surface.zig       # 终端表面
+│   ├── d2d.zig           # Direct2D 渲染器
+│   └── ...
+├── renderer/
+│   ├── Direct2D.zig      # D2D 渲染实现
+│   └── D3D11.zig         # D3D11 渲染实现
+├── font/
+│   └── directwrite.zig   # DirectWrite 字体后端
+└── ...
+```
+
+## 分支说明
+
+| 分支 | 说明 |
+|------|------|
+| `ghostty_win_v2` | **主分支**，Direct2D 渲染器，当前最稳定 |
+| `ghostty_win` | 早期版本，已归档 |
+| `directx-renderer` | D3D11 渲染器实验分支 |
+| `freetype-emoji` | Emoji 渲染优化实验 |
+| `win32-apprt` | Win32 应用运行时原型 |
+
+## 贡献指南
+
+欢迎所有形式的贡献！无论是 Bug 报告、功能建议、代码提交还是文档改进。
+
+### 提交 Issue
+
+- 使用 [GitHub Issues](https://github.com/zcg/ghostty-win/issues)
+- 请描述清楚问题现象、复现步骤、系统版本
+- 如果是渲染问题，请提供截图和显卡信息
+
+### 提交 PR
+
+1. Fork 本仓库
+2. 从 `ghostty_win_v2` 创建你的功能分支：`git checkout -b feature/xxx`
+3. 提交更改（commit message 用英文，格式参考现有提交）
+4. 推送到你的 Fork：`git push origin feature/xxx`
+5. 在 GitHub 上发起 Pull Request
+
+### 开发注意事项
+
+- 本项目使用 **Zig** 编写，不是 C/C++/Rust
+- Win32 相关的代码在 `src/apprt/win32/` 目录
+- 渲染器代码在 `src/renderer/` 目录
+- 提交信息格式：`win32: 简短描述`
+- 请确保 `zig build` 能通过再提交
+
+## 致谢
+
+- [Mitchell Hashimoto](https://github.com/mitchellh) 和 [Ghostty 团队](https://github.com/ghostty-org) — 创造了如此优秀的终端模拟器
+- [Yasuhiro Matsumoto (mattn)](https://github.com/mattn) — 最初的 Win32 移植工作
+- 所有为本项目做出贡献的开发者
+
+## 许可证
+
+本项目基于 [MIT 许可证](LICENSE) 开源。
+
+Ghostty 原始代码版权归属 Mitchell Hashimoto 和 Ghostty 贡献者。Windows 移植部分的修改和新增代码遵循同样的 MIT 许可证。
