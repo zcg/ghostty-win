@@ -85,11 +85,8 @@
 git clone https://github.com/zcg/ghostty-win.git
 cd ghostty-win
 
-# 构建（Debug 模式）
-zig build -Dtarget=x86_64-windows
-
-# 构建（Release 模式，推荐）
-zig build -Dtarget=x86_64-windows -Doptimize=ReleaseFast
+# 构建（推荐命令）
+zig build -Dapp-runtime=win32 -Doptimize=ReleaseSmall
 ```
 
 构建完成后，可执行文件位于 `zig-out/bin/ghostty.exe`。
