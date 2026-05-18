@@ -171,6 +171,15 @@ src/
 - 提交信息格式：`win32: 简短描述`
 - 请确保 `zig build` 能通过再提交
 
+### 为什么不用 zigwin32 绑定库？
+
+本项目的手写 Win32 API 声明全部集中在 `src/apprt/win32/sys.zig` 中，没有引入 [marlersoft/zigwin32](https://github.com/marlersoft/zigwin32) 这类外部绑定库。原因如下：
+
+1. **精简依赖**：只声明实际用到的类型和函数，避免拉入整个 Win32 API 绑定，减少构建时间和依赖复杂度。
+2. **新 API 支持**：Windows 11 的 DWM  backdrop 效果（Acrylic/Mica）、ConPTY 等新 API 在 zigwin32 中更新滞后，手写声明可以第一时间使用系统新特性。
+3. **灵活定制**：部分 API 需要根据项目场景做适配（如 `WNDPROC` 的调用约定、`AccentPolicy` 的字段布局），手写比绑定库生成的代码更可控。
+4. **Zig 演进兼容**：`std.os.windows` 模块在不同 Zig 版本间有符号删减风险，集中管理自己的声明比依赖外部绑定库更容易维护。
+
 ## 致谢
 
 - [Mitchell Hashimoto](https://github.com/mitchellh) 和 [Ghostty 团队](https://github.com/ghostty-org) — 创造了如此优秀的终端模拟器
