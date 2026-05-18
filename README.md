@@ -113,8 +113,7 @@ font-size = 12
 theme = "Catppuccin Mocha"
 
 # 背景模糊（Windows 11）
-background-blur = true
-background-blur-effect = "acrylic"
+background-blur = acrylic
 
 # 窗口设置
 window-padding-x = 4
