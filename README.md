@@ -1,3 +1,4 @@
+# 本项目是早期大模型gpt5.4时期vibe来的泔水垃圾项目.早已不再维护
 <h1 align="center">
   <img src="https://github.com/user-attachments/assets/fe853809-ba8b-400b-83ab-a9a0da25be8a" alt="Logo" width="128">
   <br>Ghostty for Windows
